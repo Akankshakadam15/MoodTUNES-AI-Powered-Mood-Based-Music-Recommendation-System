@@ -1,0 +1,179 @@
+{
+  "Akanksha": [
+    {
+      "timestamp": "2026-03-29T18:24:30.092002",
+      "mood": "Positive",
+      "emotion": "Romantic / Positive",
+      "songs_recommended": 8,
+      "input_method": "text"
+    },
+    {
+      "timestamp": "2026-03-29T18:35:20.212757",
+      "mood": "Positive",
+      "emotion": "Romantic / Positive",
+      "songs_recommended": 8,
+      "input_method": "text"
+    },
+    {
+      "timestamp": "2026-03-29T21:13:02.916140",
+      "mood": "Neutral",
+      "emotion": "Neutral / Calm",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-29T21:18:10.744893",
+      "mood": "Cloudy",
+      "emotion": "Neutral / Calm",
+      "songs_recommended": 10,
+      "input_method": "weather"
+    },
+    {
+      "timestamp": "2026-03-29T21:23:20.773006",
+      "mood": "Happy",
+      "emotion": "Happy / Energetic",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T12:17:18.719788",
+      "mood": "Neutral",
+      "emotion": "Neutral / Calm",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T12:23:04.007830",
+      "mood": "Neutral",
+      "emotion": "Neutral / Calm",
+      "songs_recommended": 16,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T12:32:47.098441",
+      "mood": "Neutral",
+      "emotion": "Neutral / Calm",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T12:59:54.047636",
+      "mood": "Happy",
+      "emotion": "Happy / Energetic",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T13:08:39.423826",
+      "mood": "Sad",
+      "emotion": "Sad",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T13:12:43.829276",
+      "mood": "Neutral",
+      "emotion": "Neutral / Calm",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T13:28:52.856231",
+      "mood": "Happy",
+      "emotion": "Happy / Energetic",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T13:39:19.680508",
+      "mood": "Sad",
+      "emotion": "Sad",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T13:43:22.674832",
+      "mood": "Neutral",
+      "emotion": "Neutral / Calm",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T13:52:17.903742",
+      "mood": "Sad",
+      "emotion": "Sad",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T13:59:25.692861",
+      "mood": "Positive",
+      "emotion": "Romantic / Positive",
+      "songs_recommended": 10,
+      "input_method": "text"
+    },
+    {
+      "timestamp": "2026-03-30T15:23:03.961145",
+      "mood": "Happy",
+      "emotion": "Happy / Energetic",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-03-30T17:21:34.470895",
+      "mood": "Positive",
+      "emotion": "Romantic / Positive",
+      "songs_recommended": 10,
+      "input_method": "text"
+    },
+    {
+      "timestamp": "2026-03-30T17:21:59.203733",
+      "mood": "Positive",
+      "emotion": "Romantic / Positive",
+      "songs_recommended": 10,
+      "input_method": "text"
+    },
+    {
+      "timestamp": "2026-03-30T17:22:26.730359",
+      "mood": "Positive",
+      "emotion": "Romantic / Positive",
+      "songs_recommended": 10,
+      "input_method": "text"
+    },
+    {
+      "timestamp": "2026-03-31T09:48:36.319947",
+      "mood": "Positive",
+      "emotion": "Romantic / Positive",
+      "songs_recommended": 10,
+      "input_method": "text"
+    },
+    {
+      "timestamp": "2026-03-31T13:58:35.180354",
+      "mood": "Neutral",
+      "emotion": "Neutral / Calm",
+      "songs_recommended": 10,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-04-01T12:44:08.675255",
+      "mood": "Positive",
+      "emotion": "Romantic / Positive",
+      "songs_recommended": 10,
+      "input_method": "text"
+    },
+    {
+      "timestamp": "2026-04-01T12:44:24.417176",
+      "mood": "Positive",
+      "emotion": "Romantic / Positive",
+      "songs_recommended": 10,
+      "input_method": "text"
+    },
+    {
+      "timestamp": "2026-04-01T17:51:35.474474",
+      "mood": "Positive",
+      "emotion": "Romantic / Positive",
+      "songs_recommended": 10,
+      "input_method": "text"
+    }
+  ]
+}

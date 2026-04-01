@@ -1,0 +1,7 @@
+& "d:\Projects\Mood and Facial Based Music Recommandation system\hvenv\Scripts\Activate.ps1"[project]
+name = "mood-and-facial-based-music-recommandation-system"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []

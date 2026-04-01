@@ -1,0 +1,11 @@
+streamlit>=1.32.0
+pandas>=2.0.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
+textblob>=0.18.0
+vaderSentiment>=3.3.2
+deepface>=0.0.93
+Pillow>=10.0.0
+plotly>=5.20.0
+requests>=2.31.0
+tf-keras>=2.16.0
