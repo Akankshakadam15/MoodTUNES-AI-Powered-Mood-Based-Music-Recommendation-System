@@ -174,6 +174,20 @@
       "emotion": "Romantic / Positive",
       "songs_recommended": 10,
       "input_method": "text"
+    },
+    {
+      "timestamp": "2026-04-07T22:00:13.026030",
+      "mood": "Happy",
+      "emotion": "Happy / Energetic",
+      "songs_recommended": 10,
+      "input_method": "upload"
+    },
+    {
+      "timestamp": "2026-04-07T22:01:23.012692",
+      "mood": "Sad",
+      "emotion": "Sad",
+      "songs_recommended": 10,
+      "input_method": "face"
     }
   ]
 }

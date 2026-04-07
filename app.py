@@ -33,8 +33,8 @@ except ImportError:
 st.set_page_config(
     page_title="MoodTunes – AI Music Recommender",
     page_icon="🎧",
-    layout="wide",
-    initial_sidebar_state="expanded",
+    layout="centered",
+    initial_sidebar_state="auto",
 )
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
