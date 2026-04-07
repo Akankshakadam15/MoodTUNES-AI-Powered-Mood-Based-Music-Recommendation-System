@@ -8,4 +8,4 @@ Pillow
 plotly
 requests
 deepface==0.0.79
-tensorflow==2.12.0
+tensorflow==2.10.0
