@@ -188,6 +188,27 @@
       "emotion": "Sad",
       "songs_recommended": 10,
       "input_method": "face"
+    },
+    {
+      "timestamp": "2026-04-11T10:24:13.628935",
+      "mood": "Happy",
+      "emotion": "Happy / Energetic",
+      "songs_recommended": 9,
+      "input_method": "face"
+    },
+    {
+      "timestamp": "2026-04-11T10:26:42.797501",
+      "mood": "Cloudy",
+      "emotion": "Neutral / Calm",
+      "songs_recommended": 9,
+      "input_method": "weather"
+    },
+    {
+      "timestamp": "2026-04-11T10:27:28.315475",
+      "mood": "Happy",
+      "emotion": "Happy / Energetic",
+      "songs_recommended": 9,
+      "input_method": "face"
     }
   ]
 }
