@@ -78,6 +78,9 @@ h1,h2,h3{font-family:'Orbitron',monospace;color:#1a1a2e;}
 .rating-stars{color:#FFD700;font-size:1rem;margin-top:4px;}
 .rating-comment{color:#228855;font-size:.8rem;font-style:italic;margin-top:4px;}
 .rating-time{color:#aaaacc;font-size:.72rem;margin-top:2px;}
+.camera-permission-box{background:#f0f7ff;border:1px solid #0077aa44;border-radius:14px;padding:24px;text-align:center;margin-bottom:20px;}
+.camera-permission-title{font-family:'Orbitron',monospace;font-size:1.1rem;color:#0077aa;margin-bottom:10px;}
+.camera-permission-steps{text-align:left;display:inline-block;margin-top:10px;font-size:.88rem;color:#333355;line-height:1.9;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -383,6 +386,45 @@ def get_weather(city):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# CAMERA PERMISSION HELPER
+# ══════════════════════════════════════════════════════════════════════════
+def show_camera_permission_guide():
+    """
+    Show a clear step-by-step guide for the user to grant camera permission
+    in their browser before st.camera_input is shown.
+    Returns True if user clicked 'I have allowed camera access', False otherwise.
+    """
+    if st.session_state.get("camera_permission_granted", False):
+        return True
+
+    st.markdown("""
+    <div class='camera-permission-box'>
+        <div class='camera-permission-title'>📷 Camera Permission Required</div>
+        <div style='color:#555577;font-size:.88rem;margin-bottom:8px;'>
+            MoodTunes needs access to your camera to detect your facial expression and recommend music that matches your mood.
+        </div>
+        <div class='camera-permission-steps'>
+            <b>How to allow camera access:</b><br>
+            🔒 <b>Step 1:</b> Look at the <b>address bar</b> of your browser (top of the page).<br>
+            🔔 <b>Step 2:</b> You will see a <b>camera icon</b> or a <b>permission popup</b> — click it.<br>
+            ✅ <b>Step 3:</b> Select <b>"Allow"</b> to grant camera access.<br>
+            🔄 <b>Step 4:</b> If no popup appeared, click the <b>🔒 lock icon</b> next to the URL → Site Settings → Camera → Allow.<br>
+            🖥️ <b>Step 5:</b> After allowing, click the button below to proceed.
+        </div>
+        <div style='margin-top:14px;font-size:.8rem;color:#888899;'>
+            ⚠️ Your camera feed is processed <b>locally</b> and is <b>never stored or uploaded</b>.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.button("✅ I Have Allowed Camera Access — Open Camera", use_container_width=True):
+        st.session_state["camera_permission_granted"] = True
+        st.rerun()
+
+    return False
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # RECOMMENDATION ENGINE
 # ══════════════════════════════════════════════════════════════════════════
 def recommend_by_emotion_label(emotion_label, input_score, user_text,
@@ -623,14 +665,28 @@ def main_app(username):
         if "current_recs" not in st.session_state:
             st.session_state["current_recs"] = []
 
+        # ── METHOD: TYPE YOUR MOOD ──
         if "✍️" in input_method:
+            # Reset camera permission when switching away from camera tab
+            if st.session_state.get("camera_permission_granted"):
+                st.session_state["camera_permission_granted"] = False
+
             c1,c2 = st.columns(2)
             with c1:
                 user_input    = st.text_area("💬 How are you feeling?", placeholder="e.g. I'm feeling stressed today…", height=120)
                 prefer_camera = st.checkbox("Prefer camera over typed mood?", value=False)
             with c2:
                 st.markdown("📷 Capture face (optional)")
-                camera_image = st.camera_input("Webcam capture", key="cam1")
+                # Show permission guide before camera if prefer_camera is checked
+                if prefer_camera:
+                    cam_allowed = show_camera_permission_guide()
+                    if cam_allowed:
+                        camera_image = st.camera_input("Webcam capture", key="cam1")
+                    else:
+                        camera_image = None
+                else:
+                    camera_image = st.camera_input("Webcam capture", key="cam1")
+
             if st.button("🔮 Recommend Songs", use_container_width=True):
                 with st.spinner("Analysing mood…"):
                     recs, error = get_recommendations(user_input, camera_image, prefer_camera=prefer_camera, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
@@ -651,26 +707,35 @@ def main_app(username):
                             st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "OpenCV Smile")
                             log_history(username, fl, em, top_n, "face")
 
+        # ── METHOD: FACE CAMERA ──
         elif "📷" in input_method:
-            camera_image = st.camera_input("📷 Capture your face", key="cam2")
-            if st.button("🔮 Analyse My Face", use_container_width=True):
-                if camera_image:
-                    with st.spinner("Detecting smile…"):
-                        pil = Image.open(io.BytesIO(camera_image.getvalue()))
-                        dom = detect_face_emotion_from_image(pil)
-                    if dom:
-                        sc,fl,rt,em = map_face_emotion_to_label(dom)
-                        st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "OpenCV Smile")
-                        log_history(username, fl, em, top_n, "face")
-                        recs, err = recommend_by_emotion_label(em, sc, f"Face:{dom}", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
-                        st.session_state["current_recs"] = recs or [] if not err else []
-                        if err: st.error(err)
+            # Show permission guide before showing the camera widget
+            cam_allowed = show_camera_permission_guide()
+            if cam_allowed:
+                camera_image = st.camera_input("📷 Capture your face", key="cam2")
+                if st.button("🔮 Analyse My Face", use_container_width=True):
+                    if camera_image:
+                        with st.spinner("Detecting smile…"):
+                            pil = Image.open(io.BytesIO(camera_image.getvalue()))
+                            dom = detect_face_emotion_from_image(pil)
+                        if dom:
+                            sc,fl,rt,em = map_face_emotion_to_label(dom)
+                            st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "OpenCV Smile")
+                            log_history(username, fl, em, top_n, "face")
+                            recs, err = recommend_by_emotion_label(em, sc, f"Face:{dom}", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
+                            st.session_state["current_recs"] = recs or [] if not err else []
+                            if err: st.error(err)
+                        else:
+                            st.error("Could not detect face. Try better lighting.")
                     else:
-                        st.error("Could not detect face. Try better lighting.")
-                else:
-                    st.warning("Please capture a photo first.")
+                        st.warning("Please capture a photo first.")
 
+        # ── METHOD: WEATHER ──
         elif "🌦️" in input_method:
+            # Reset camera permission when switching to non-camera method
+            if st.session_state.get("camera_permission_granted"):
+                st.session_state["camera_permission_granted"] = False
+
             city = st.text_input("🏙️ Enter your city", placeholder="Mumbai, Delhi, London…")
             if st.button("🔮 Mood from Weather", use_container_width=True):
                 if city.strip():
@@ -689,7 +754,12 @@ def main_app(username):
                 else:
                     st.warning("Please enter a city name.")
 
+        # ── METHOD: UPLOAD IMAGE ──
         elif "📂" in input_method:
+            # Reset camera permission when switching to non-camera method
+            if st.session_state.get("camera_permission_granted"):
+                st.session_state["camera_permission_granted"] = False
+
             uploaded_file = st.file_uploader("Drop image here", type=["jpg","jpeg","png","webp"], label_visibility="collapsed")
             if uploaded_file:
                 pil_image = Image.open(uploaded_file)
@@ -945,12 +1015,13 @@ feedback_file_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_
 
         st.markdown("---")
         st.markdown("""
-#### ℹ️ About MoodTunes v3.3 — Smile Detection Edition
+#### ℹ️ About MoodTunes v3.3 
 
 **What is new in v3.3:**
 - ✅ Smile detection using OpenCV haarcascade smile detector
 - ✅ Histogram equalisation for dark photos — works even with dark background
 - ✅ Happy photo now shows Happy mood correctly
+- ✅ Camera permission guide shown before camera widget opens
 - ✅ No tensorflow or deepface needed
 - ✅ All previous fixes retained
 
