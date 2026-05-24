@@ -10,3 +10,7 @@ plotly>=5.20.0
 requests>=2.31.0
 fer>=22.5.1
 opencv-python-headless>=4.5.5.64
+
+deepface
+tf-keras
+tensorflow-cpu
