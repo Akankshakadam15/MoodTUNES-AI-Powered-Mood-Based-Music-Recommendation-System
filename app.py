@@ -1,5 +1,5 @@
 #╔══════════════════════════════════════════════════════════════════════════╗
-# ║           MOODTUNES – AI Mood-Based Music Recommendation System ║
+# ║           MOODTUNES – AI Powered Mood-Based Music Recommendation System           ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 import urllib.parse
@@ -18,7 +18,7 @@ from textblob import TextBlob
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from PIL import Image, ImageEnhance
+from PIL import Image
 
 try:
     from deepface import DeepFace
@@ -84,7 +84,7 @@ h1,h2,h3{font-family:'Orbitron',monospace;color:#1a1a2e;}
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# JSON HELPERS — atomic write with temp file so data is never corrupted
+# JSON HELPERS
 # ══════════════════════════════════════════════════════════════════════════
 def _load_json(path, default):
     try:
@@ -268,37 +268,6 @@ EMOTION_MAP = {
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# IMAGE PRE-PROCESSING — NEW v3.2
-# Automatically brighten dark images before passing to DeepFace
-# ══════════════════════════════════════════════════════════════════════════
-def preprocess_image_for_detection(pil_image):
-    """
-    Brighten / enhance a PIL image so DeepFace has a better chance
-    on dark or under-exposed photos.
-    Returns: enhanced PIL image
-    """
-    img_rgb = pil_image.convert("RGB")
-
-    # Check average brightness
-    grayscale  = img_rgb.convert("L")
-    avg_bright = np.array(grayscale).mean()   # 0-255
-
-    if avg_bright < 80:
-        # Very dark — boost brightness and contrast significantly
-        factor = max(1.5, min(3.0, 180 / max(avg_bright, 1)))
-        img_rgb = ImageEnhance.Brightness(img_rgb).enhance(factor)
-        img_rgb = ImageEnhance.Contrast(img_rgb).enhance(1.4)
-        img_rgb = ImageEnhance.Sharpness(img_rgb).enhance(1.3)
-    elif avg_bright < 120:
-        # Moderately dark — mild boost
-        factor = max(1.2, min(2.0, 140 / max(avg_bright, 1)))
-        img_rgb = ImageEnhance.Brightness(img_rgb).enhance(factor)
-        img_rgb = ImageEnhance.Contrast(img_rgb).enhance(1.2)
-
-    return img_rgb
-
-
-# ══════════════════════════════════════════════════════════════════════════
 # MOOD DETECTION
 # ══════════════════════════════════════════════════════════════════════════
 def detect_user_mood_from_text(text):
@@ -318,35 +287,21 @@ def map_face_emotion_to_label(face_emotion):
     if "fear" in e:                   return -0.7, "Fearful",   "Calm",      "Deep Sad"
     return 0.0, "Neutral", "Calm", "Neutral / Calm"
 
-
 def detect_face_emotion_from_image(pil_image):
-    """
-    v3.2 FIX: Auto-enhances dark images before detection.
-    Tries enforce_detection=True first, then falls back to False.
-    Returns dominant emotion string or None.
-    """
     if not DEEPFACE_AVAILABLE:
         return None
     try:
-        # Step 1: Pre-process (brighten dark images)
-        enhanced = preprocess_image_for_detection(pil_image)
-        img_arr  = np.array(enhanced)
-
-        # Step 2: Try strict detection first
+        img    = np.array(pil_image.convert("RGB"))
+        # Try strict first, fall back to no enforcement
         try:
-            result = DeepFace.analyze(img_arr, actions=["emotion"], enforce_detection=True)
+            result = DeepFace.analyze(img, actions=["emotion"], enforce_detection=True)
         except Exception:
-            # Step 3: Fallback — no enforcement (works on partial/dark faces)
-            result = DeepFace.analyze(img_arr, actions=["emotion"], enforce_detection=False)
-
-        if isinstance(result, list):
-            return result[0].get("dominant_emotion")
+            result = DeepFace.analyze(img, actions=["emotion"], enforce_detection=False)
+        if isinstance(result, list): return result[0].get("dominant_emotion")
         return result.get("dominant_emotion")
-
     except Exception as e:
         st.error(f"Face detection error: {e}")
         return None
-
 
 def weather_to_mood(weather_desc):
     w = weather_desc.lower()
@@ -592,7 +547,7 @@ def render_sidebar(username):
     if st.sidebar.button("🚪 Logout"):
         st.session_state["logged_in"] = False
         st.rerun()
-    st.sidebar.caption("MoodTunes v3.2 · Dark Image Fix")
+    st.sidebar.caption("MoodTunes v3.2 · Fixed Edition")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -654,14 +609,13 @@ def main_app(username):
 
         # ── FACE CAMERA ──────────────────────────────────────────────────
         elif "📷" in input_method:
-            if not DEEPFACE_AVAILABLE:
-                st.warning("⚠️ DeepFace not installed. Run: pip install deepface tf-keras")
+            # FIX: No warning shown. If DeepFace not installed, fallback to Neutral mood automatically.
             camera_image = st.camera_input("📷 Capture your face", key="cam2")
             if st.button("🔮 Analyse My Face", use_container_width=True):
                 if camera_image:
                     with st.spinner("Detecting emotion…"):
                         pil = Image.open(io.BytesIO(camera_image.getvalue()))
-                        dom = detect_face_emotion_from_image(pil)
+                        dom = detect_face_emotion_from_image(pil) if DEEPFACE_AVAILABLE else None
                     if dom:
                         sc,fl,rt,em = map_face_emotion_to_label(dom)
                         st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "DeepFace")
@@ -673,12 +627,15 @@ def main_app(username):
                         else:
                             st.session_state["current_recs"] = recs or []
                     else:
-                        # v3.2 FIX: Fallback to Neutral instead of hard error
-                        st.warning("⚠️ Face not clearly detected even after enhancement. Defaulting to Neutral / Calm mood. Try better lighting for accurate results.")
+                        # FIX: DeepFace not installed OR face not detected → fallback to Neutral mood, still show songs
+                        if not DEEPFACE_AVAILABLE:
+                            st.info("ℹ️ Face detection is not available on this server. Showing songs for Neutral mood.")
+                        else:
+                            st.warning("⚠️ Face not clearly detected. Showing songs for Neutral mood instead.")
                         sc, fl, rt, em = 0.0, "Neutral", "Calm", "Neutral / Calm"
-                        st.session_state["current_mood"] = (em, sc, "Face: unclear (fallback)", "DeepFace")
+                        st.session_state["current_mood"] = (em, sc, "Face (fallback)", "Auto")
                         log_history(username, fl, em, top_n, "face")
-                        recs, err = recommend_by_emotion_label(em, sc, "Face:unclear", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
+                        recs, err = recommend_by_emotion_label(em, sc, "Face:neutral", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
                         st.session_state["current_recs"] = recs or []
                 else:
                     st.warning("Please capture a photo first.")
@@ -708,33 +665,15 @@ def main_app(username):
 
         # ── UPLOAD IMAGE ─────────────────────────────────────────────────
         elif "📂" in input_method:
-            if not DEEPFACE_AVAILABLE:
-                st.warning("⚠️ DeepFace not installed. Run: pip install deepface tf-keras")
             uploaded_file = st.file_uploader("Drop image here", type=["jpg","jpeg","png","webp"], label_visibility="collapsed")
             if uploaded_file:
                 pil_image = Image.open(uploaded_file)
                 c1,c2 = st.columns(2)
-                with c1:
-                    st.image(pil_image, caption="Uploaded Image", use_column_width=True)
-                with c2:
-                    # v3.2: also show enhanced preview so user sees what DeepFace receives
-                    enhanced_preview = preprocess_image_for_detection(pil_image)
-                    grayscale  = pil_image.convert("L")
-                    avg_bright = int(np.array(grayscale).mean())
-                    st.markdown(f"**File:** {uploaded_file.name}")
-                    st.markdown(f"**Size:** {uploaded_file.size/1024:.1f} KB")
-                    st.markdown(f"**Dim:** {pil_image.width}×{pil_image.height} px")
-                    st.markdown(f"**Avg Brightness:** {avg_bright}/255")
-                    if avg_bright < 80:
-                        st.warning("🌑 Very dark image — auto-enhancing before detection")
-                        st.image(enhanced_preview, caption="Enhanced (sent to AI)", use_column_width=True)
-                    elif avg_bright < 120:
-                        st.info("🌒 Moderately dark — mild enhancement applied")
-                        st.image(enhanced_preview, caption="Enhanced (sent to AI)", use_column_width=True)
-
+                with c1: st.image(pil_image, caption="Uploaded Image", use_column_width=True)
+                with c2: st.markdown(f"**File:** {uploaded_file.name}\n\n**Size:** {uploaded_file.size/1024:.1f} KB\n\n**Dim:** {pil_image.width}×{pil_image.height} px")
                 if st.button("🔮 Detect Emotion from Image", use_container_width=True):
                     with st.spinner("Analysing…"):
-                        dom = detect_face_emotion_from_image(pil_image)
+                        dom = detect_face_emotion_from_image(pil_image) if DEEPFACE_AVAILABLE else None
                     if dom:
                         sc,fl,rt,em = map_face_emotion_to_label(dom)
                         st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "DeepFace (Upload)")
@@ -746,21 +685,18 @@ def main_app(username):
                         else:
                             st.session_state["current_recs"] = recs or []
                     else:
-                        # v3.2 FIX: Fallback to Neutral instead of hard error
-                        st.warning("⚠️ Face not detected even after brightness enhancement. Defaulting to Neutral / Calm mood. Try a clearer, well-lit, front-facing photo.")
+                        # FIX: DeepFace not installed OR face not detected → fallback to Neutral mood, still show songs
+                        if not DEEPFACE_AVAILABLE:
+                            st.info("ℹ️ Face detection is not available on this server. Showing songs for Neutral mood.")
+                        else:
+                            st.warning("⚠️ Face not clearly detected. Try a clearer, well-lit, front-facing photo. Showing Neutral mood songs.")
                         sc, fl, rt, em = 0.0, "Neutral", "Calm", "Neutral / Calm"
-                        st.session_state["current_mood"] = (em, sc, "Face: unclear (fallback)", "DeepFace (Upload)")
+                        st.session_state["current_mood"] = (em, sc, "Face (fallback)", "Auto")
                         log_history(username, fl, em, top_n, "upload")
-                        recs, err = recommend_by_emotion_label(em, sc, "Face:unclear", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
+                        recs, err = recommend_by_emotion_label(em, sc, "Face:neutral", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
                         st.session_state["current_recs"] = recs or []
             else:
-                st.markdown("""
-                <div style='border:2px dashed #b0c4de;border-radius:14px;padding:48px 24px;text-align:center;background:#f7f9fc'>
-                    <div style='font-size:2.5rem'>📂</div>
-                    <div style='font-family:Orbitron,monospace;color:#0077aa;margin-top:12px'>Drag & Drop your image here</div>
-                    <div style='font-size:.8rem;margin-top:8px'>Supports JPG, JPEG, PNG, WEBP</div>
-                    <div style='font-size:.75rem;color:#228855;margin-top:6px'>✨ Dark images are auto-enhanced before detection</div>
-                </div>""", unsafe_allow_html=True)
+                st.markdown("<div style='border:2px dashed #b0c4de;border-radius:14px;padding:48px 24px;text-align:center;background:#f7f9fc'><div style='font-size:2.5rem'>📂</div><div style='font-family:Orbitron,monospace;color:#0077aa;margin-top:12px'>Drag & Drop your image here</div><div style='font-size:.8rem;margin-top:8px'>Supports JPG, JPEG, PNG, WEBP</div></div>", unsafe_allow_html=True)
 
         # ── RENDER RECS ──────────────────────────────────────────────────
         recs = st.session_state.get("current_recs", [])
@@ -772,7 +708,7 @@ def main_app(username):
             for i, r in enumerate(recs):
                 song_card(r, username, i)
         st.markdown("---")
-        st.caption("💡 Tip: Good lighting improves face detection accuracy. Dark images are auto-enhanced in v3.2!")
+        st.caption("💡 Tip: Good lighting improves face detection accuracy.")
 
     # ── TAB 2: PLAYLISTS ─────────────────────────────────────────────────
     with tabs[1]:
@@ -999,28 +935,11 @@ feedback_file_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_
 
         st.markdown("---")
         st.markdown("""
-#### ℹ️ About MoodTunes v3.2 — Dark Image Fix
 
-**What's new in v3.2:**
-- ✅ **Dark image auto-enhancement** — PIL brightness/contrast boost before DeepFace analysis
-- ✅ **Fallback mood** — when face still undetected, defaults to Neutral/Calm + still shows songs
-- ✅ **Enhanced image preview** — shows user the brightened version being sent to AI
-- ✅ **Brightness indicator** — shows avg brightness score (0-255) so user knows why detection may fail
 
-**All fixes from v3.1 still apply:**
-- ✅ Playlist song count always correct
-- ✅ Songs actually add to playlist
-- ✅ Add button no longer clears song list
-- ✅ Ratings & comments save correctly (upsert)
-- ✅ Song list survives rating save rerun
-- ✅ Analytics shows all rated songs
-- ✅ Existing ratings load on Discover
-- ✅ Remove individual songs from playlist
-- ✅ All file paths absolute using __file__
-
-**Stack:** Python · Streamlit · VADER · TextBlob · DeepFace · Scikit-learn · Plotly · Open-Meteo · PIL
+**Stack:** Python · Streamlit · VADER · TextBlob · DeepFace (optional) · Scikit-learn · Plotly · Open-Meteo
         """)
-        st.caption("MoodTunes v3.2 · Dark Image Fix Edition")
+        st.caption("MoodTunes v3.2 · DeepFace Fallback Fix")
 
 
 # ══════════════════════════════════════════════════════════════════════════
