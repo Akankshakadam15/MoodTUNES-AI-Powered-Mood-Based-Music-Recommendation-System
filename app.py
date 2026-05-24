@@ -953,7 +953,7 @@ feedback_file_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_
                 st.success("Ratings cleared.")
 
         st.markdown("---")
-        st.markdown("""
+        st.markdown(""")
 
 # ══════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
