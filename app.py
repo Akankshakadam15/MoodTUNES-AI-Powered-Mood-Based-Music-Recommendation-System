@@ -1,5 +1,5 @@
 #╔══════════════════════════════════════════════════════════════════════════╗
-# ║           MOODTUNES – AI Mood-Based Music Recommender            ║
+# ║           MOODTUNES – AI Mood-Based Music Recommendation System ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 import urllib.parse
@@ -18,7 +18,7 @@ from textblob import TextBlob
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 try:
     from deepface import DeepFace
@@ -144,7 +144,7 @@ def get_user_color(username):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# PLAYLIST — FIX: removed strict verify check that caused false failures
+# PLAYLIST
 # ══════════════════════════════════════════════════════════════════════════
 def get_user_playlists(username):
     return _load_json(PLAYLIST_FILE, {}).get(username, {})
@@ -161,7 +161,6 @@ def delete_playlist(username, pl_name):
         _save_json(PLAYLIST_FILE, data)
 
 def add_song_to_playlist(username, pl_name, song_dict):
-    # FIX: read → check dup → append → write. No broken verify step.
     data = _load_json(PLAYLIST_FILE, {})
     if username not in data:
         data[username] = {}
@@ -195,20 +194,18 @@ def get_history(username):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# FEEDBACK / RATINGS — FIX: always reads fresh, never relies on session state
+# FEEDBACK / RATINGS
 # ══════════════════════════════════════════════════════════════════════════
 def save_feedback(username, song, artist, rating, comment=""):
     data = _load_json(FEEDBACK_FILE, {})
     if username not in data:
         data[username] = []
-    # FIX: update existing rating for same song instead of duplicating
     for existing in data[username]:
         if existing["song"] == str(song).strip() and existing["artist"] == str(artist).strip():
             existing["rating"]    = int(rating)
             existing["comment"]   = str(comment).strip()
             existing["timestamp"] = datetime.datetime.now().isoformat()
             return _save_json(FEEDBACK_FILE, data)
-    # New rating
     data[username].append({
         "timestamp": datetime.datetime.now().isoformat(),
         "song":    str(song).strip(),
@@ -222,7 +219,6 @@ def get_feedback(username):
     return _load_json(FEEDBACK_FILE, {}).get(username, [])
 
 def get_song_feedback(username, song, artist):
-    """Get existing feedback for a specific song."""
     for fb in get_feedback(username):
         if fb["song"] == str(song).strip() and fb["artist"] == str(artist).strip():
             return fb
@@ -272,6 +268,37 @@ EMOTION_MAP = {
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# IMAGE PRE-PROCESSING — NEW v3.2
+# Automatically brighten dark images before passing to DeepFace
+# ══════════════════════════════════════════════════════════════════════════
+def preprocess_image_for_detection(pil_image):
+    """
+    Brighten / enhance a PIL image so DeepFace has a better chance
+    on dark or under-exposed photos.
+    Returns: enhanced PIL image
+    """
+    img_rgb = pil_image.convert("RGB")
+
+    # Check average brightness
+    grayscale  = img_rgb.convert("L")
+    avg_bright = np.array(grayscale).mean()   # 0-255
+
+    if avg_bright < 80:
+        # Very dark — boost brightness and contrast significantly
+        factor = max(1.5, min(3.0, 180 / max(avg_bright, 1)))
+        img_rgb = ImageEnhance.Brightness(img_rgb).enhance(factor)
+        img_rgb = ImageEnhance.Contrast(img_rgb).enhance(1.4)
+        img_rgb = ImageEnhance.Sharpness(img_rgb).enhance(1.3)
+    elif avg_bright < 120:
+        # Moderately dark — mild boost
+        factor = max(1.2, min(2.0, 140 / max(avg_bright, 1)))
+        img_rgb = ImageEnhance.Brightness(img_rgb).enhance(factor)
+        img_rgb = ImageEnhance.Contrast(img_rgb).enhance(1.2)
+
+    return img_rgb
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # MOOD DETECTION
 # ══════════════════════════════════════════════════════════════════════════
 def detect_user_mood_from_text(text):
@@ -291,17 +318,35 @@ def map_face_emotion_to_label(face_emotion):
     if "fear" in e:                   return -0.7, "Fearful",   "Calm",      "Deep Sad"
     return 0.0, "Neutral", "Calm", "Neutral / Calm"
 
+
 def detect_face_emotion_from_image(pil_image):
+    """
+    v3.2 FIX: Auto-enhances dark images before detection.
+    Tries enforce_detection=True first, then falls back to False.
+    Returns dominant emotion string or None.
+    """
     if not DEEPFACE_AVAILABLE:
         return None
     try:
-        img    = np.array(pil_image.convert("RGB"))
-        result = DeepFace.analyze(img, actions=["emotion"], enforce_detection=False)
-        if isinstance(result, list): return result[0].get("dominant_emotion")
+        # Step 1: Pre-process (brighten dark images)
+        enhanced = preprocess_image_for_detection(pil_image)
+        img_arr  = np.array(enhanced)
+
+        # Step 2: Try strict detection first
+        try:
+            result = DeepFace.analyze(img_arr, actions=["emotion"], enforce_detection=True)
+        except Exception:
+            # Step 3: Fallback — no enforcement (works on partial/dark faces)
+            result = DeepFace.analyze(img_arr, actions=["emotion"], enforce_detection=False)
+
+        if isinstance(result, list):
+            return result[0].get("dominant_emotion")
         return result.get("dominant_emotion")
+
     except Exception as e:
         st.error(f"Face detection error: {e}")
         return None
+
 
 def weather_to_mood(weather_desc):
     w = weather_desc.lower()
@@ -431,7 +476,6 @@ def song_card(r, username, idx):
     </div>""", unsafe_allow_html=True)
 
     # ── ADD TO PLAYLIST ──────────────────────────────────────────────────
-    # FIX: Store add result in session_state keyed by song+playlist, never rerun
     playlists = get_user_playlists(username)
     pl_names  = list(playlists.keys())
 
@@ -445,14 +489,12 @@ def song_card(r, username, idx):
                              "emotion": r["emotion"], "genre": r.get("genre","—")}
                 success, reason = add_song_to_playlist(username, chosen, song_dict)
                 if success:
-                    # FIX: store success message without rerun so recs list stays
                     st.session_state[f"add_msg_{idx}"] = ("success", f"✅ Added **{r['song']}** to **{chosen}**!")
                 elif reason == "already_exists":
                     st.session_state[f"add_msg_{idx}"] = ("warning", "⚠️ Already in that playlist.")
                 else:
                     st.session_state[f"add_msg_{idx}"] = ("error", f"❌ Save failed ({reason}). Check file permissions.")
 
-        # Show add message if present
         msg_key = f"add_msg_{idx}"
         if msg_key in st.session_state:
             kind, msg = st.session_state[msg_key]
@@ -463,11 +505,9 @@ def song_card(r, username, idx):
         st.caption("📋 No playlists yet — create one in the Playlists tab first.")
 
     # ── RATE THIS SONG ───────────────────────────────────────────────────
-    # FIX: Read existing rating from disk directly, not just session_state
     safe  = re.sub(r"[^a-zA-Z0-9]", "_", r["song"])[:40]
     s_key = f"rated_{username}_{safe}"
 
-    # Check disk for existing rating if not in session state
     if s_key not in st.session_state:
         existing_fb = get_song_feedback(username, r["song"], r["artist"])
         if existing_fb:
@@ -552,7 +592,7 @@ def render_sidebar(username):
     if st.sidebar.button("🚪 Logout"):
         st.session_state["logged_in"] = False
         st.rerun()
-    st.sidebar.caption("MoodTunes v3.1 · Fixed Edition")
+    st.sidebar.caption("MoodTunes v3.2 · Dark Image Fix")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -580,10 +620,10 @@ def main_app(username):
             with a2: top_n = st.slider("Songs to Recommend", 5, 20, 10)
             with a3: diversity = st.checkbox("Artist Diversity Mode", value=False)
 
-        # FIX: Store recs in session_state so they survive reruns (from rating save)
         if "current_recs" not in st.session_state:
             st.session_state["current_recs"] = []
 
+        # ── TEXT INPUT ───────────────────────────────────────────────────
         if "✍️" in input_method:
             c1,c2 = st.columns(2)
             with c1:
@@ -612,8 +652,10 @@ def main_app(username):
                             st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "DeepFace")
                             log_history(username, fl, em, top_n, "face")
 
+        # ── FACE CAMERA ──────────────────────────────────────────────────
         elif "📷" in input_method:
-            if not DEEPFACE_AVAILABLE: st.warning("⚠️ DeepFace not installed. Run: pip install deepface tf-keras")
+            if not DEEPFACE_AVAILABLE:
+                st.warning("⚠️ DeepFace not installed. Run: pip install deepface tf-keras")
             camera_image = st.camera_input("📷 Capture your face", key="cam2")
             if st.button("🔮 Analyse My Face", use_container_width=True):
                 if camera_image:
@@ -631,10 +673,17 @@ def main_app(username):
                         else:
                             st.session_state["current_recs"] = recs or []
                     else:
-                        st.error("Could not detect face. Try better lighting.")
+                        # v3.2 FIX: Fallback to Neutral instead of hard error
+                        st.warning("⚠️ Face not clearly detected even after enhancement. Defaulting to Neutral / Calm mood. Try better lighting for accurate results.")
+                        sc, fl, rt, em = 0.0, "Neutral", "Calm", "Neutral / Calm"
+                        st.session_state["current_mood"] = (em, sc, "Face: unclear (fallback)", "DeepFace")
+                        log_history(username, fl, em, top_n, "face")
+                        recs, err = recommend_by_emotion_label(em, sc, "Face:unclear", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
+                        st.session_state["current_recs"] = recs or []
                 else:
                     st.warning("Please capture a photo first.")
 
+        # ── WEATHER ──────────────────────────────────────────────────────
         elif "🌦️" in input_method:
             city = st.text_input("🏙️ Enter your city", placeholder="Mumbai, Delhi, London…")
             if st.button("🔮 Mood from Weather", use_container_width=True):
@@ -657,14 +706,32 @@ def main_app(username):
                 else:
                     st.warning("Please enter a city name.")
 
+        # ── UPLOAD IMAGE ─────────────────────────────────────────────────
         elif "📂" in input_method:
-            if not DEEPFACE_AVAILABLE: st.warning("⚠️ DeepFace not installed. Run: pip install deepface tf-keras")
+            if not DEEPFACE_AVAILABLE:
+                st.warning("⚠️ DeepFace not installed. Run: pip install deepface tf-keras")
             uploaded_file = st.file_uploader("Drop image here", type=["jpg","jpeg","png","webp"], label_visibility="collapsed")
             if uploaded_file:
                 pil_image = Image.open(uploaded_file)
                 c1,c2 = st.columns(2)
-                with c1: st.image(pil_image, caption="Uploaded Image", use_column_width=True)
-                with c2: st.markdown(f"**File:** {uploaded_file.name}\n\n**Size:** {uploaded_file.size/1024:.1f} KB\n\n**Dim:** {pil_image.width}×{pil_image.height} px")
+                with c1:
+                    st.image(pil_image, caption="Uploaded Image", use_column_width=True)
+                with c2:
+                    # v3.2: also show enhanced preview so user sees what DeepFace receives
+                    enhanced_preview = preprocess_image_for_detection(pil_image)
+                    grayscale  = pil_image.convert("L")
+                    avg_bright = int(np.array(grayscale).mean())
+                    st.markdown(f"**File:** {uploaded_file.name}")
+                    st.markdown(f"**Size:** {uploaded_file.size/1024:.1f} KB")
+                    st.markdown(f"**Dim:** {pil_image.width}×{pil_image.height} px")
+                    st.markdown(f"**Avg Brightness:** {avg_bright}/255")
+                    if avg_bright < 80:
+                        st.warning("🌑 Very dark image — auto-enhancing before detection")
+                        st.image(enhanced_preview, caption="Enhanced (sent to AI)", use_column_width=True)
+                    elif avg_bright < 120:
+                        st.info("🌒 Moderately dark — mild enhancement applied")
+                        st.image(enhanced_preview, caption="Enhanced (sent to AI)", use_column_width=True)
+
                 if st.button("🔮 Detect Emotion from Image", use_container_width=True):
                     with st.spinner("Analysing…"):
                         dom = detect_face_emotion_from_image(pil_image)
@@ -679,14 +746,25 @@ def main_app(username):
                         else:
                             st.session_state["current_recs"] = recs or []
                     else:
-                        st.error("Could not detect a face. Try a clearer, well-lit photo.")
+                        # v3.2 FIX: Fallback to Neutral instead of hard error
+                        st.warning("⚠️ Face not detected even after brightness enhancement. Defaulting to Neutral / Calm mood. Try a clearer, well-lit, front-facing photo.")
+                        sc, fl, rt, em = 0.0, "Neutral", "Calm", "Neutral / Calm"
+                        st.session_state["current_mood"] = (em, sc, "Face: unclear (fallback)", "DeepFace (Upload)")
+                        log_history(username, fl, em, top_n, "upload")
+                        recs, err = recommend_by_emotion_label(em, sc, "Face:unclear", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
+                        st.session_state["current_recs"] = recs or []
             else:
-                st.markdown("<div style='border:2px dashed #b0c4de;border-radius:14px;padding:48px 24px;text-align:center;background:#f7f9fc'><div style='font-size:2.5rem'>📂</div><div style='font-family:Orbitron,monospace;color:#0077aa;margin-top:12px'>Drag & Drop your image here</div><div style='font-size:.8rem;margin-top:8px'>Supports JPG, JPEG, PNG, WEBP</div></div>", unsafe_allow_html=True)
+                st.markdown("""
+                <div style='border:2px dashed #b0c4de;border-radius:14px;padding:48px 24px;text-align:center;background:#f7f9fc'>
+                    <div style='font-size:2.5rem'>📂</div>
+                    <div style='font-family:Orbitron,monospace;color:#0077aa;margin-top:12px'>Drag & Drop your image here</div>
+                    <div style='font-size:.8rem;margin-top:8px'>Supports JPG, JPEG, PNG, WEBP</div>
+                    <div style='font-size:.75rem;color:#228855;margin-top:6px'>✨ Dark images are auto-enhanced before detection</div>
+                </div>""", unsafe_allow_html=True)
 
-        # FIX: Render recs from session_state — survives rating reruns
+        # ── RENDER RECS ──────────────────────────────────────────────────
         recs = st.session_state.get("current_recs", [])
         if recs:
-            # Show mood card if available
             if "current_mood" in st.session_state:
                 em, sc, fl, method = st.session_state["current_mood"]
                 mood_card(em, sc, fl, method)
@@ -694,7 +772,7 @@ def main_app(username):
             for i, r in enumerate(recs):
                 song_card(r, username, i)
         st.markdown("---")
-        st.caption("💡 Tip: Good lighting improves face detection accuracy.")
+        st.caption("💡 Tip: Good lighting improves face detection accuracy. Dark images are auto-enhanced in v3.2!")
 
     # ── TAB 2: PLAYLISTS ─────────────────────────────────────────────────
     with tabs[1]:
@@ -708,7 +786,6 @@ def main_app(username):
                     else: st.error("❌ Could not save. Check file permissions.")
                 else: st.warning("Please enter a name.")
 
-        # FIX: Always read fresh from disk — shows real song count
         playlists = get_user_playlists(username)
         if not playlists:
             st.info("No playlists yet. Create one above, then add songs from Discover!")
@@ -732,7 +809,6 @@ def main_app(username):
                                     </div>
                                 </div>""", unsafe_allow_html=True)
                             with c2:
-                                # FIX: Remove individual song from playlist
                                 safe_song = re.sub(r"[^a-zA-Z0-9]", "_", s['song'])[:20]
                                 if st.button("🗑️", key=f"rm_{pl_name}_{safe_song}", help=f"Remove {s['song']}"):
                                     data = _load_json(PLAYLIST_FILE, {})
@@ -752,7 +828,6 @@ def main_app(username):
     with tabs[2]:
         st.subheader("Your Mood Analytics")
         history  = get_history(username)
-        # FIX: Always re-read feedback fresh here
         feedback = get_feedback(username)
 
         if not history:
@@ -793,10 +868,9 @@ def main_app(username):
                     <div class='history-mood'>{meta['emoji']} {h['emotion']} — {h['mood']}</div>
                 </div>""", unsafe_allow_html=True)
 
-        # RATINGS — always re-read fresh from disk
         st.markdown("---")
         st.markdown("#### ⭐ Your Song Ratings")
-        feedback = get_feedback(username)  # Fresh read
+        feedback = get_feedback(username)
         if not feedback:
             st.info("You haven't rated any songs yet. Rate songs from the Discover tab!")
         else:
@@ -925,22 +999,28 @@ feedback_file_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_
 
         st.markdown("---")
         st.markdown("""
-#### ℹ️ About MoodTunes v3.1 — All Bugs Fixed
+#### ℹ️ About MoodTunes v3.2 — Dark Image Fix
 
-**What was fixed in v3.1:**
-- ✅ Playlist song count always correct — reads fresh from disk every render
-- ✅ Songs actually add to playlist — removed broken verify step
-- ✅ Add button no longer clears song list — result stored in session_state, no rerun
-- ✅ Ratings & comments save correctly — upsert logic (update if exists)
-- ✅ Song list survives rating save rerun — recs stored in session_state
-- ✅ Analytics shows all rated songs — always reads fresh from disk
-- ✅ Existing ratings load on Discover — checks disk if not in session_state
-- ✅ Remove individual songs from playlist — new per-song delete button
+**What's new in v3.2:**
+- ✅ **Dark image auto-enhancement** — PIL brightness/contrast boost before DeepFace analysis
+- ✅ **Fallback mood** — when face still undetected, defaults to Neutral/Calm + still shows songs
+- ✅ **Enhanced image preview** — shows user the brightened version being sent to AI
+- ✅ **Brightness indicator** — shows avg brightness score (0-255) so user knows why detection may fail
+
+**All fixes from v3.1 still apply:**
+- ✅ Playlist song count always correct
+- ✅ Songs actually add to playlist
+- ✅ Add button no longer clears song list
+- ✅ Ratings & comments save correctly (upsert)
+- ✅ Song list survives rating save rerun
+- ✅ Analytics shows all rated songs
+- ✅ Existing ratings load on Discover
+- ✅ Remove individual songs from playlist
 - ✅ All file paths absolute using __file__
 
-**Stack:** Python · Streamlit · VADER · TextBlob · DeepFace · Scikit-learn · Plotly · Open-Meteo
+**Stack:** Python · Streamlit · VADER · TextBlob · DeepFace · Scikit-learn · Plotly · Open-Meteo · PIL
         """)
-        st.caption("MoodTunes v3.1 · All Bugs Fixed")
+        st.caption("MoodTunes v3.2 · Dark Image Fix Edition")
 
 
 # ══════════════════════════════════════════════════════════════════════════
