@@ -305,7 +305,6 @@ def detect_face_emotion_from_image(pil_image):
         img_cv = np.array(pil_image.convert("RGB"))
         gray   = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
 
-        # Try to detect face using Haar cascade
         face_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
@@ -314,14 +313,10 @@ def detect_face_emotion_from_image(pil_image):
         )
 
         if len(faces) > 0:
-            # Face found — analyse brightness of face region to guess emotion
             x, y, w, h = faces[0]
             face_region = gray[y:y+h, x:x+w]
             brightness  = np.mean(face_region)
-
-            # Contrast (std deviation) — high contrast = expressive face
-            contrast = np.std(face_region)
-
+            contrast    = np.std(face_region)
             if brightness > 130 and contrast > 40:
                 return "happy"
             elif brightness > 110:
@@ -331,7 +326,6 @@ def detect_face_emotion_from_image(pil_image):
             else:
                 return "sad"
         else:
-            # No face found — use overall image brightness
             brightness = np.mean(gray)
             if brightness > 140:
                 return "happy"
@@ -558,7 +552,7 @@ def login_page():
                     st.error("Incorrect username or password.")
         with t2:
             st.markdown("<br>", unsafe_allow_html=True)
-            nu = st.text_input("Choose Username", key="su_u")
+            nu  = st.text_input("Choose Username", key="su_u")
             np_ = st.text_input("Choose Password", type="password", key="su_p")
             if st.button("Create Account →", use_container_width=True):
                 ok, msg = save_user(nu, np_)
@@ -953,7 +947,8 @@ feedback_file_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_
                 st.success("Ratings cleared.")
 
         st.markdown("---")
-        st.markdown(""")
+
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
