@@ -8,9 +8,4 @@ vaderSentiment>=3.3.2
 Pillow>=10.0.0
 plotly>=5.20.0
 requests>=2.31.0
-fer>=22.5.1
 opencv-python-headless>=4.5.5.64
-
-deepface
-tf-keras
-tensorflow-cpu
