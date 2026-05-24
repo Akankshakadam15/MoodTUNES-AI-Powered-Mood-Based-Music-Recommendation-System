@@ -1,4 +1,4 @@
-🎧 MoodTunes — Mood & Facial Emotion Based Music Recommendation System
+🎧 MoodTUNES-AI-Powered-Mood-Based-Music-Recommendation-System
 
 An AI-Powered Human-Centric Music Recommender using NLP + Facial Emotion Recognition + Explainable AI
 
