@@ -33,7 +33,6 @@ st.set_page_config(
     initial_sidebar_state="auto",
 )
 
-# ── ABSOLUTE FILE PATHS ─────────────────────────────────────────────────────
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 USER_FILE     = os.path.join(BASE_DIR, "users.csv")
 PLAYLIST_FILE = os.path.join(BASE_DIR, "playlists.json")
@@ -288,7 +287,7 @@ def map_face_emotion_to_label(face_emotion):
     return 0.0, "Neutral", "Calm", "Neutral / Calm"
 
 def detect_face_emotion_from_image(pil_image):
-    # ── METHOD 1: DeepFace (if installed) ───────────────────────────────
+    # METHOD 1: DeepFace (if installed)
     if DEEPFACE_AVAILABLE:
         try:
             img    = np.array(pil_image.convert("RGB"))
@@ -299,19 +298,17 @@ def detect_face_emotion_from_image(pil_image):
             st.error(f"Face detection error: {e}")
             return None
 
-    # ── METHOD 2: OpenCV + Brightness (no tensorflow needed) ────────────
+    # METHOD 2: OpenCV + Brightness (no tensorflow needed)
     try:
         import cv2
         img_cv = np.array(pil_image.convert("RGB"))
         gray   = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
-
         face_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
         faces = face_cascade.detectMultiScale(
             gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
         )
-
         if len(faces) > 0:
             x, y, w, h = faces[0]
             face_region = gray[y:y+h, x:x+w]
@@ -321,21 +318,13 @@ def detect_face_emotion_from_image(pil_image):
                 return "happy"
             elif brightness > 110:
                 return "neutral"
-            elif brightness > 80:
-                return "sad"
             else:
                 return "sad"
         else:
             brightness = np.mean(gray)
-            if brightness > 140:
-                return "happy"
-            elif brightness > 100:
-                return "neutral"
-            elif brightness > 60:
-                return "sad"
-            else:
-                return "sad"
-
+            if brightness > 140:   return "happy"
+            elif brightness > 100: return "neutral"
+            else:                  return "sad"
     except Exception as e:
         st.error(f"Detection error: {e}")
         return "neutral"
@@ -467,7 +456,6 @@ def song_card(r, username, idx):
         </div>
     </div>""", unsafe_allow_html=True)
 
-    # ── ADD TO PLAYLIST ──────────────────────────────────────────────────
     playlists = get_user_playlists(username)
     pl_names  = list(playlists.keys())
 
@@ -485,7 +473,7 @@ def song_card(r, username, idx):
                 elif reason == "already_exists":
                     st.session_state[f"add_msg_{idx}"] = ("warning", "⚠️ Already in that playlist.")
                 else:
-                    st.session_state[f"add_msg_{idx}"] = ("error", f"❌ Save failed ({reason}). Check file permissions.")
+                    st.session_state[f"add_msg_{idx}"] = ("error", f"❌ Save failed ({reason}).")
 
         msg_key = f"add_msg_{idx}"
         if msg_key in st.session_state:
@@ -496,7 +484,6 @@ def song_card(r, username, idx):
     else:
         st.caption("📋 No playlists yet — create one in the Playlists tab first.")
 
-    # ── RATE THIS SONG ───────────────────────────────────────────────────
     safe  = re.sub(r"[^a-zA-Z0-9]", "_", r["song"])[:40]
     s_key = f"rated_{username}_{safe}"
 
@@ -517,15 +504,14 @@ def song_card(r, username, idx):
                 st.rerun()
         else:
             rating  = st.slider("Your rating", 1, 5, 3, key=f"rating_{idx}", format="%d ⭐")
-            comment = st.text_input("Comment (optional)",
-                                     placeholder="e.g. Love this track!", key=f"comment_{idx}")
+            comment = st.text_input("Comment (optional)", placeholder="e.g. Love this track!", key=f"comment_{idx}")
             if st.button("💾 Save Rating", key=f"save_{idx}"):
                 ok = save_feedback(username, r["song"], r["artist"], rating, comment)
                 if ok:
                     st.session_state[s_key] = {"rating": rating, "comment": comment}
                     st.rerun()
                 else:
-                    st.error("❌ Could not save rating. Check file permissions for feedback.json")
+                    st.error("❌ Could not save rating.")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -655,11 +641,8 @@ def main_app(username):
                         st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "OpenCV")
                         log_history(username, fl, em, top_n, "face")
                         recs, err = recommend_by_emotion_label(em, sc, f"Face:{dom}", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
-                        if err:
-                            st.error(err)
-                            st.session_state["current_recs"] = []
-                        else:
-                            st.session_state["current_recs"] = recs or []
+                        st.session_state["current_recs"] = recs or [] if not err else []
+                        if err: st.error(err)
                     else:
                         st.error("Could not detect face. Try better lighting.")
                 else:
@@ -677,11 +660,8 @@ def main_app(username):
                         st.session_state["current_mood"] = (em, sc, desc, "Weather (Open-Meteo)")
                         log_history(username, desc, em, top_n, "weather")
                         recs, err = recommend_by_emotion_label(em, sc, f"Weather:{desc}", "Mood-based", desc, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
-                        if err:
-                            st.error(err)
-                            st.session_state["current_recs"] = []
-                        else:
-                            st.session_state["current_recs"] = recs or []
+                        st.session_state["current_recs"] = recs or [] if not err else []
+                        if err: st.error(err)
                     else:
                         st.error("Could not fetch weather. Check city name.")
                 else:
@@ -699,18 +679,15 @@ def main_app(username):
                         dom = detect_face_emotion_from_image(pil_image)
                     if dom:
                         sc,fl,rt,em = map_face_emotion_to_label(dom)
-                        st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "OpenCV (Upload)")
+                        st.session_state["current_mood"] = (em, sc, f"Detected:{dom}", "OpenCV (Upload)")
                         log_history(username, fl, em, top_n, "upload")
                         recs, err = recommend_by_emotion_label(em, sc, f"Face:{dom}", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
-                        if err:
-                            st.error(err)
-                            st.session_state["current_recs"] = []
-                        else:
-                            st.session_state["current_recs"] = recs or []
+                        st.session_state["current_recs"] = recs or [] if not err else []
+                        if err: st.error(err)
                     else:
                         st.error("Could not detect emotion. Try a clearer, well-lit photo.")
             else:
-                st.markdown("<div style='border:2px dashed #b0c4de;border-radius:14px;padding:48px 24px;text-align:center;background:#f7f9fc'><div style='font-size:2.5rem'>📂</div><div style='font-family:Orbitron,monospace;color:#0077aa;margin-top:12px'>Drag & Drop your image here</div><div style='font-size:.8rem;margin-top:8px'>Supports JPG, JPEG, PNG, WEBP</div></div>", unsafe_allow_html=True)
+                st.markdown("<div style='border:2px dashed #b0c4de;border-radius:14px;padding:48px 24px;text-align:center;background:#f7f9fc'><div style='font-size:2.5rem'>📂</div><div style='font-family:Orbitron,monospace;color:#0077aa;margin-top:12px'>Drag and Drop your image here</div><div style='font-size:.8rem;margin-top:8px'>Supports JPG, JPEG, PNG, WEBP</div></div>", unsafe_allow_html=True)
 
         recs = st.session_state.get("current_recs", [])
         if recs:
@@ -732,7 +709,7 @@ def main_app(username):
                 if new_pl.strip():
                     ok = save_playlist(username, new_pl.strip(), [])
                     if ok: st.success(f"✅ Playlist '{new_pl}' created!"); st.rerun()
-                    else: st.error("❌ Could not save. Check file permissions.")
+                    else:  st.error("❌ Could not save. Check file permissions.")
                 else: st.warning("Please enter a name.")
 
         playlists = get_user_playlists(username)
@@ -762,10 +739,7 @@ def main_app(username):
                                 if st.button("🗑️", key=f"rm_{pl_name}_{safe_song}", help=f"Remove {s['song']}"):
                                     data = _load_json(PLAYLIST_FILE, {})
                                     if username in data and pl_name in data[username]:
-                                        data[username][pl_name] = [
-                                            x for x in data[username][pl_name]
-                                            if x["song"] != s["song"]
-                                        ]
+                                        data[username][pl_name] = [x for x in data[username][pl_name] if x["song"] != s["song"]]
                                         _save_json(PLAYLIST_FILE, data)
                                         st.rerun()
                     else:
@@ -841,10 +815,10 @@ def main_app(username):
 
             st.markdown("##### 📝 All Your Rated Songs")
             for fb in reversed(feedback):
-                rating  = int(fb.get("rating",0))
-                stars   = "⭐" * rating + "☆" * (5-rating)
-                ts      = fb.get("timestamp","")[:16].replace("T"," ")
-                comment = fb.get("comment","").strip()
+                rating   = int(fb.get("rating",0))
+                stars    = "⭐" * rating + "☆" * (5-rating)
+                ts       = fb.get("timestamp","")[:16].replace("T"," ")
+                comment  = fb.get("comment","").strip()
                 cmt_html = f"<div class='rating-comment'>💬 {comment}</div>" if comment else "<div class='rating-comment' style='color:#aaa'>No comment</div>"
                 st.markdown(f"""
                 <div class='rating-card'>
@@ -943,11 +917,21 @@ feedback_file_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_
         with c4:
             if st.button("Clear All Ratings"):
                 d = _load_json(FEEDBACK_FILE,{}); d[username]=[]; _save_json(FEEDBACK_FILE,d)
-                for k in [k for k in st.session_state if k.startswith(f"rated_{username}_")]: del st.session_state[k]
+                for k in [k for k in st.session_state if k.startswith(f"rated_{username}_")]:
+                    del st.session_state[k]
                 st.success("Ratings cleared.")
 
         st.markdown("---")
+        st.markdown("""
+#### About MoodTunes v3.2 — Cloud Edition
 
+- Uses OpenCV for face detection (no TensorFlow needed)
+- All playlist, ratings, analytics bugs fixed
+- Works fully on Streamlit Cloud
+
+**Stack:** Python · Streamlit · VADER · TextBlob · OpenCV · Scikit-learn · Plotly · Open-Meteo
+        """)
+        st.caption("MoodTunes v3.2 · Cloud Edition")
 
 
 # ══════════════════════════════════════════════════════════════════════════
