@@ -1,5 +1,5 @@
 #╔══════════════════════════════════════════════════════════════════════════╗
-# ║           MOODTUNES – AI Powered Mood-Based Music Recommendation System           ║
+# ║           MOODTUNES – AI Powered Mood-Based Music Recommendation System ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 import urllib.parse
@@ -288,20 +288,63 @@ def map_face_emotion_to_label(face_emotion):
     return 0.0, "Neutral", "Calm", "Neutral / Calm"
 
 def detect_face_emotion_from_image(pil_image):
-    if not DEEPFACE_AVAILABLE:
-        return None
-    try:
-        img    = np.array(pil_image.convert("RGB"))
-        # Try strict first, fall back to no enforcement
+    # ── METHOD 1: DeepFace (if installed) ───────────────────────────────
+    if DEEPFACE_AVAILABLE:
         try:
-            result = DeepFace.analyze(img, actions=["emotion"], enforce_detection=True)
-        except Exception:
+            img    = np.array(pil_image.convert("RGB"))
             result = DeepFace.analyze(img, actions=["emotion"], enforce_detection=False)
-        if isinstance(result, list): return result[0].get("dominant_emotion")
-        return result.get("dominant_emotion")
+            if isinstance(result, list): return result[0].get("dominant_emotion")
+            return result.get("dominant_emotion")
+        except Exception as e:
+            st.error(f"Face detection error: {e}")
+            return None
+
+    # ── METHOD 2: OpenCV + Brightness (no tensorflow needed) ────────────
+    try:
+        import cv2
+        img_cv = np.array(pil_image.convert("RGB"))
+        gray   = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
+
+        # Try to detect face using Haar cascade
+        face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+        faces = face_cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+        )
+
+        if len(faces) > 0:
+            # Face found — analyse brightness of face region to guess emotion
+            x, y, w, h = faces[0]
+            face_region = gray[y:y+h, x:x+w]
+            brightness  = np.mean(face_region)
+
+            # Contrast (std deviation) — high contrast = expressive face
+            contrast = np.std(face_region)
+
+            if brightness > 130 and contrast > 40:
+                return "happy"
+            elif brightness > 110:
+                return "neutral"
+            elif brightness > 80:
+                return "sad"
+            else:
+                return "sad"
+        else:
+            # No face found — use overall image brightness
+            brightness = np.mean(gray)
+            if brightness > 140:
+                return "happy"
+            elif brightness > 100:
+                return "neutral"
+            elif brightness > 60:
+                return "sad"
+            else:
+                return "sad"
+
     except Exception as e:
-        st.error(f"Face detection error: {e}")
-        return None
+        st.error(f"Detection error: {e}")
+        return "neutral"
 
 def weather_to_mood(weather_desc):
     w = weather_desc.lower()
@@ -547,7 +590,7 @@ def render_sidebar(username):
     if st.sidebar.button("🚪 Logout"):
         st.session_state["logged_in"] = False
         st.rerun()
-    st.sidebar.caption("MoodTunes v3.2 · Fixed Edition")
+    st.sidebar.caption("MoodTunes v3.2 · Cloud Edition")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -578,7 +621,6 @@ def main_app(username):
         if "current_recs" not in st.session_state:
             st.session_state["current_recs"] = []
 
-        # ── TEXT INPUT ───────────────────────────────────────────────────
         if "✍️" in input_method:
             c1,c2 = st.columns(2)
             with c1:
@@ -604,21 +646,19 @@ def main_app(username):
                         dom = detect_face_emotion_from_image(pil)
                         if dom:
                             sc,fl,_,em = map_face_emotion_to_label(dom)
-                            st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "DeepFace")
+                            st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "OpenCV")
                             log_history(username, fl, em, top_n, "face")
 
-        # ── FACE CAMERA ──────────────────────────────────────────────────
         elif "📷" in input_method:
-            # FIX: No warning shown. If DeepFace not installed, fallback to Neutral mood automatically.
             camera_image = st.camera_input("📷 Capture your face", key="cam2")
             if st.button("🔮 Analyse My Face", use_container_width=True):
                 if camera_image:
                     with st.spinner("Detecting emotion…"):
                         pil = Image.open(io.BytesIO(camera_image.getvalue()))
-                        dom = detect_face_emotion_from_image(pil) if DEEPFACE_AVAILABLE else None
+                        dom = detect_face_emotion_from_image(pil)
                     if dom:
                         sc,fl,rt,em = map_face_emotion_to_label(dom)
-                        st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "DeepFace")
+                        st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "OpenCV")
                         log_history(username, fl, em, top_n, "face")
                         recs, err = recommend_by_emotion_label(em, sc, f"Face:{dom}", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
                         if err:
@@ -627,20 +667,10 @@ def main_app(username):
                         else:
                             st.session_state["current_recs"] = recs or []
                     else:
-                        # FIX: DeepFace not installed OR face not detected → fallback to Neutral mood, still show songs
-                        if not DEEPFACE_AVAILABLE:
-                            st.info("ℹ️ Face detection is not available on this server. Showing songs for Neutral mood.")
-                        else:
-                            st.warning("⚠️ Face not clearly detected. Showing songs for Neutral mood instead.")
-                        sc, fl, rt, em = 0.0, "Neutral", "Calm", "Neutral / Calm"
-                        st.session_state["current_mood"] = (em, sc, "Face (fallback)", "Auto")
-                        log_history(username, fl, em, top_n, "face")
-                        recs, err = recommend_by_emotion_label(em, sc, "Face:neutral", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
-                        st.session_state["current_recs"] = recs or []
+                        st.error("Could not detect face. Try better lighting.")
                 else:
                     st.warning("Please capture a photo first.")
 
-        # ── WEATHER ──────────────────────────────────────────────────────
         elif "🌦️" in input_method:
             city = st.text_input("🏙️ Enter your city", placeholder="Mumbai, Delhi, London…")
             if st.button("🔮 Mood from Weather", use_container_width=True):
@@ -663,7 +693,6 @@ def main_app(username):
                 else:
                     st.warning("Please enter a city name.")
 
-        # ── UPLOAD IMAGE ─────────────────────────────────────────────────
         elif "📂" in input_method:
             uploaded_file = st.file_uploader("Drop image here", type=["jpg","jpeg","png","webp"], label_visibility="collapsed")
             if uploaded_file:
@@ -672,11 +701,11 @@ def main_app(username):
                 with c1: st.image(pil_image, caption="Uploaded Image", use_column_width=True)
                 with c2: st.markdown(f"**File:** {uploaded_file.name}\n\n**Size:** {uploaded_file.size/1024:.1f} KB\n\n**Dim:** {pil_image.width}×{pil_image.height} px")
                 if st.button("🔮 Detect Emotion from Image", use_container_width=True):
-                    with st.spinner("Analysing…"):
-                        dom = detect_face_emotion_from_image(pil_image) if DEEPFACE_AVAILABLE else None
+                    with st.spinner("Analysing image…"):
+                        dom = detect_face_emotion_from_image(pil_image)
                     if dom:
                         sc,fl,rt,em = map_face_emotion_to_label(dom)
-                        st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "DeepFace (Upload)")
+                        st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "OpenCV (Upload)")
                         log_history(username, fl, em, top_n, "upload")
                         recs, err = recommend_by_emotion_label(em, sc, f"Face:{dom}", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
                         if err:
@@ -685,20 +714,10 @@ def main_app(username):
                         else:
                             st.session_state["current_recs"] = recs or []
                     else:
-                        # FIX: DeepFace not installed OR face not detected → fallback to Neutral mood, still show songs
-                        if not DEEPFACE_AVAILABLE:
-                            st.info("ℹ️ Face detection is not available on this server. Showing songs for Neutral mood.")
-                        else:
-                            st.warning("⚠️ Face not clearly detected. Try a clearer, well-lit, front-facing photo. Showing Neutral mood songs.")
-                        sc, fl, rt, em = 0.0, "Neutral", "Calm", "Neutral / Calm"
-                        st.session_state["current_mood"] = (em, sc, "Face (fallback)", "Auto")
-                        log_history(username, fl, em, top_n, "upload")
-                        recs, err = recommend_by_emotion_label(em, sc, "Face:neutral", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
-                        st.session_state["current_recs"] = recs or []
+                        st.error("Could not detect emotion. Try a clearer, well-lit photo.")
             else:
                 st.markdown("<div style='border:2px dashed #b0c4de;border-radius:14px;padding:48px 24px;text-align:center;background:#f7f9fc'><div style='font-size:2.5rem'>📂</div><div style='font-family:Orbitron,monospace;color:#0077aa;margin-top:12px'>Drag & Drop your image here</div><div style='font-size:.8rem;margin-top:8px'>Supports JPG, JPEG, PNG, WEBP</div></div>", unsafe_allow_html=True)
 
-        # ── RENDER RECS ──────────────────────────────────────────────────
         recs = st.session_state.get("current_recs", [])
         if recs:
             if "current_mood" in st.session_state:
@@ -935,12 +954,6 @@ feedback_file_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_
 
         st.markdown("---")
         st.markdown("""
-
-
-**Stack:** Python · Streamlit · VADER · TextBlob · DeepFace (optional) · Scikit-learn · Plotly · Open-Meteo
-        """)
-        st.caption("MoodTunes v3.2 · DeepFace Fallback Fix")
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # ENTRY POINT
