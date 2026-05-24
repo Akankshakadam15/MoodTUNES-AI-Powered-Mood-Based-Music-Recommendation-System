@@ -1,5 +1,5 @@
 #╔══════════════════════════════════════════════════════════════════════════╗
-# ║           MOODTUNES – AI Mood-Based Music Recommender            ║
+# ║           MOODTUNES – AI Powered Mood-Based Music Recommendation System ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 import urllib.parse
@@ -33,7 +33,6 @@ st.set_page_config(
     initial_sidebar_state="auto",
 )
 
-# ── ABSOLUTE FILE PATHS ─────────────────────────────────────────────────────
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 USER_FILE     = os.path.join(BASE_DIR, "users.csv")
 PLAYLIST_FILE = os.path.join(BASE_DIR, "playlists.json")
@@ -84,7 +83,7 @@ h1,h2,h3{font-family:'Orbitron',monospace;color:#1a1a2e;}
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# JSON HELPERS — atomic write with temp file so data is never corrupted
+# JSON HELPERS
 # ══════════════════════════════════════════════════════════════════════════
 def _load_json(path, default):
     try:
@@ -144,7 +143,7 @@ def get_user_color(username):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# PLAYLIST — FIX: removed strict verify check that caused false failures
+# PLAYLIST
 # ══════════════════════════════════════════════════════════════════════════
 def get_user_playlists(username):
     return _load_json(PLAYLIST_FILE, {}).get(username, {})
@@ -161,7 +160,6 @@ def delete_playlist(username, pl_name):
         _save_json(PLAYLIST_FILE, data)
 
 def add_song_to_playlist(username, pl_name, song_dict):
-    # FIX: read → check dup → append → write. No broken verify step.
     data = _load_json(PLAYLIST_FILE, {})
     if username not in data:
         data[username] = {}
@@ -195,20 +193,18 @@ def get_history(username):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# FEEDBACK / RATINGS — FIX: always reads fresh, never relies on session state
+# FEEDBACK / RATINGS
 # ══════════════════════════════════════════════════════════════════════════
 def save_feedback(username, song, artist, rating, comment=""):
     data = _load_json(FEEDBACK_FILE, {})
     if username not in data:
         data[username] = []
-    # FIX: update existing rating for same song instead of duplicating
     for existing in data[username]:
         if existing["song"] == str(song).strip() and existing["artist"] == str(artist).strip():
             existing["rating"]    = int(rating)
             existing["comment"]   = str(comment).strip()
             existing["timestamp"] = datetime.datetime.now().isoformat()
             return _save_json(FEEDBACK_FILE, data)
-    # New rating
     data[username].append({
         "timestamp": datetime.datetime.now().isoformat(),
         "song":    str(song).strip(),
@@ -222,7 +218,6 @@ def get_feedback(username):
     return _load_json(FEEDBACK_FILE, {}).get(username, [])
 
 def get_song_feedback(username, song, artist):
-    """Get existing feedback for a specific song."""
     for fb in get_feedback(username):
         if fb["song"] == str(song).strip() and fb["artist"] == str(artist).strip():
             return fb
@@ -289,19 +284,72 @@ def map_face_emotion_to_label(face_emotion):
     if "angry" in e:                  return -0.6, "Angry",     "Calm",      "Sad"
     if "surprise" in e:               return  0.2, "Surprised", "Energetic", "Happy / Energetic"
     if "fear" in e:                   return -0.7, "Fearful",   "Calm",      "Deep Sad"
+    if "neutral" in e:                return  0.0, "Neutral",   "Calm",      "Neutral / Calm"
     return 0.0, "Neutral", "Calm", "Neutral / Calm"
 
 def detect_face_emotion_from_image(pil_image):
-    if not DEEPFACE_AVAILABLE:
-        return None
+    # METHOD 1: DeepFace (if installed)
+    if DEEPFACE_AVAILABLE:
+        try:
+            img    = np.array(pil_image.convert("RGB"))
+            result = DeepFace.analyze(img, actions=["emotion"], enforce_detection=False)
+            if isinstance(result, list): return result[0].get("dominant_emotion")
+            return result.get("dominant_emotion")
+        except Exception as e:
+            st.error(f"Face detection error: {e}")
+            return None
+
+    # METHOD 2: OpenCV Smile Detection (no tensorflow needed)
     try:
-        img    = np.array(pil_image.convert("RGB"))
-        result = DeepFace.analyze(img, actions=["emotion"], enforce_detection=False)
-        if isinstance(result, list): return result[0].get("dominant_emotion")
-        return result.get("dominant_emotion")
+        import cv2
+        img_cv = np.array(pil_image.convert("RGB"))
+        gray   = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
+
+        # Equalise histogram for better detection in dark photos
+        gray = cv2.equalizeHist(gray)
+
+        # Step 1: Detect face
+        face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+        faces = face_cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+        )
+
+        if len(faces) == 0:
+            # No face found — try with relaxed params
+            faces = face_cascade.detectMultiScale(
+                gray, scaleFactor=1.05, minNeighbors=3, minSize=(30, 30)
+            )
+
+        if len(faces) == 0:
+            return "neutral"
+
+        # Step 2: Detect smile inside face region
+        x, y, w, h = faces[0]
+        face_gray = gray[y:y+h, x:x+w]
+
+        smile_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_smile.xml"
+        )
+
+        # Look for smile in lower half of face only
+        lower_face = face_gray[h//2:, :]
+        smiles = smile_cascade.detectMultiScale(
+            lower_face,
+            scaleFactor=1.7,
+            minNeighbors=20,
+            minSize=(25, 25)
+        )
+
+        if len(smiles) > 0:
+            return "happy"
+        else:
+            return "neutral"
+
     except Exception as e:
-        st.error(f"Face detection error: {e}")
-        return None
+        st.error(f"Detection error: {e}")
+        return "neutral"
 
 def weather_to_mood(weather_desc):
     w = weather_desc.lower()
@@ -430,8 +478,6 @@ def song_card(r, username, idx):
         </div>
     </div>""", unsafe_allow_html=True)
 
-    # ── ADD TO PLAYLIST ──────────────────────────────────────────────────
-    # FIX: Store add result in session_state keyed by song+playlist, never rerun
     playlists = get_user_playlists(username)
     pl_names  = list(playlists.keys())
 
@@ -445,14 +491,12 @@ def song_card(r, username, idx):
                              "emotion": r["emotion"], "genre": r.get("genre","—")}
                 success, reason = add_song_to_playlist(username, chosen, song_dict)
                 if success:
-                    # FIX: store success message without rerun so recs list stays
                     st.session_state[f"add_msg_{idx}"] = ("success", f"✅ Added **{r['song']}** to **{chosen}**!")
                 elif reason == "already_exists":
                     st.session_state[f"add_msg_{idx}"] = ("warning", "⚠️ Already in that playlist.")
                 else:
-                    st.session_state[f"add_msg_{idx}"] = ("error", f"❌ Save failed ({reason}). Check file permissions.")
+                    st.session_state[f"add_msg_{idx}"] = ("error", f"❌ Save failed ({reason}).")
 
-        # Show add message if present
         msg_key = f"add_msg_{idx}"
         if msg_key in st.session_state:
             kind, msg = st.session_state[msg_key]
@@ -462,12 +506,9 @@ def song_card(r, username, idx):
     else:
         st.caption("📋 No playlists yet — create one in the Playlists tab first.")
 
-    # ── RATE THIS SONG ───────────────────────────────────────────────────
-    # FIX: Read existing rating from disk directly, not just session_state
     safe  = re.sub(r"[^a-zA-Z0-9]", "_", r["song"])[:40]
     s_key = f"rated_{username}_{safe}"
 
-    # Check disk for existing rating if not in session state
     if s_key not in st.session_state:
         existing_fb = get_song_feedback(username, r["song"], r["artist"])
         if existing_fb:
@@ -485,15 +526,14 @@ def song_card(r, username, idx):
                 st.rerun()
         else:
             rating  = st.slider("Your rating", 1, 5, 3, key=f"rating_{idx}", format="%d ⭐")
-            comment = st.text_input("Comment (optional)",
-                                     placeholder="e.g. Love this track!", key=f"comment_{idx}")
+            comment = st.text_input("Comment (optional)", placeholder="e.g. Love this track!", key=f"comment_{idx}")
             if st.button("💾 Save Rating", key=f"save_{idx}"):
                 ok = save_feedback(username, r["song"], r["artist"], rating, comment)
                 if ok:
                     st.session_state[s_key] = {"rating": rating, "comment": comment}
                     st.rerun()
                 else:
-                    st.error("❌ Could not save rating. Check file permissions for feedback.json")
+                    st.error("❌ Could not save rating.")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -520,7 +560,7 @@ def login_page():
                     st.error("Incorrect username or password.")
         with t2:
             st.markdown("<br>", unsafe_allow_html=True)
-            nu = st.text_input("Choose Username", key="su_u")
+            nu  = st.text_input("Choose Username", key="su_u")
             np_ = st.text_input("Choose Password", type="password", key="su_p")
             if st.button("Create Account →", use_container_width=True):
                 ok, msg = save_user(nu, np_)
@@ -552,7 +592,7 @@ def render_sidebar(username):
     if st.sidebar.button("🚪 Logout"):
         st.session_state["logged_in"] = False
         st.rerun()
-    st.sidebar.caption("MoodTunes v3.1 · Fixed Edition")
+    st.sidebar.caption("MoodTunes v3.3 · Smile Detection Edition")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -580,7 +620,6 @@ def main_app(username):
             with a2: top_n = st.slider("Songs to Recommend", 5, 20, 10)
             with a3: diversity = st.checkbox("Artist Diversity Mode", value=False)
 
-        # FIX: Store recs in session_state so they survive reruns (from rating save)
         if "current_recs" not in st.session_state:
             st.session_state["current_recs"] = []
 
@@ -609,27 +648,23 @@ def main_app(username):
                         dom = detect_face_emotion_from_image(pil)
                         if dom:
                             sc,fl,_,em = map_face_emotion_to_label(dom)
-                            st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "DeepFace")
+                            st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "OpenCV Smile")
                             log_history(username, fl, em, top_n, "face")
 
         elif "📷" in input_method:
-            if not DEEPFACE_AVAILABLE: st.warning("⚠️ DeepFace not installed. Run: pip install deepface tf-keras")
             camera_image = st.camera_input("📷 Capture your face", key="cam2")
             if st.button("🔮 Analyse My Face", use_container_width=True):
                 if camera_image:
-                    with st.spinner("Detecting emotion…"):
+                    with st.spinner("Detecting smile…"):
                         pil = Image.open(io.BytesIO(camera_image.getvalue()))
                         dom = detect_face_emotion_from_image(pil)
                     if dom:
                         sc,fl,rt,em = map_face_emotion_to_label(dom)
-                        st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "DeepFace")
+                        st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "OpenCV Smile")
                         log_history(username, fl, em, top_n, "face")
                         recs, err = recommend_by_emotion_label(em, sc, f"Face:{dom}", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
-                        if err:
-                            st.error(err)
-                            st.session_state["current_recs"] = []
-                        else:
-                            st.session_state["current_recs"] = recs or []
+                        st.session_state["current_recs"] = recs or [] if not err else []
+                        if err: st.error(err)
                     else:
                         st.error("Could not detect face. Try better lighting.")
                 else:
@@ -647,18 +682,14 @@ def main_app(username):
                         st.session_state["current_mood"] = (em, sc, desc, "Weather (Open-Meteo)")
                         log_history(username, desc, em, top_n, "weather")
                         recs, err = recommend_by_emotion_label(em, sc, f"Weather:{desc}", "Mood-based", desc, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
-                        if err:
-                            st.error(err)
-                            st.session_state["current_recs"] = []
-                        else:
-                            st.session_state["current_recs"] = recs or []
+                        st.session_state["current_recs"] = recs or [] if not err else []
+                        if err: st.error(err)
                     else:
                         st.error("Could not fetch weather. Check city name.")
                 else:
                     st.warning("Please enter a city name.")
 
         elif "📂" in input_method:
-            if not DEEPFACE_AVAILABLE: st.warning("⚠️ DeepFace not installed. Run: pip install deepface tf-keras")
             uploaded_file = st.file_uploader("Drop image here", type=["jpg","jpeg","png","webp"], label_visibility="collapsed")
             if uploaded_file:
                 pil_image = Image.open(uploaded_file)
@@ -666,27 +697,22 @@ def main_app(username):
                 with c1: st.image(pil_image, caption="Uploaded Image", use_column_width=True)
                 with c2: st.markdown(f"**File:** {uploaded_file.name}\n\n**Size:** {uploaded_file.size/1024:.1f} KB\n\n**Dim:** {pil_image.width}×{pil_image.height} px")
                 if st.button("🔮 Detect Emotion from Image", use_container_width=True):
-                    with st.spinner("Analysing…"):
+                    with st.spinner("Detecting smile…"):
                         dom = detect_face_emotion_from_image(pil_image)
                     if dom:
                         sc,fl,rt,em = map_face_emotion_to_label(dom)
-                        st.session_state["current_mood"] = (em, sc, f"Face:{dom}", "DeepFace (Upload)")
+                        st.session_state["current_mood"] = (em, sc, f"Detected:{dom}", "OpenCV Smile (Upload)")
                         log_history(username, fl, em, top_n, "upload")
                         recs, err = recommend_by_emotion_label(em, sc, f"Face:{dom}", rt, fl, top_n=top_n, genre_filter=genre_filter, diversity=diversity)
-                        if err:
-                            st.error(err)
-                            st.session_state["current_recs"] = []
-                        else:
-                            st.session_state["current_recs"] = recs or []
+                        st.session_state["current_recs"] = recs or [] if not err else []
+                        if err: st.error(err)
                     else:
-                        st.error("Could not detect a face. Try a clearer, well-lit photo.")
+                        st.error("Could not detect emotion. Try a clearer, well-lit photo.")
             else:
-                st.markdown("<div style='border:2px dashed #b0c4de;border-radius:14px;padding:48px 24px;text-align:center;background:#f7f9fc'><div style='font-size:2.5rem'>📂</div><div style='font-family:Orbitron,monospace;color:#0077aa;margin-top:12px'>Drag & Drop your image here</div><div style='font-size:.8rem;margin-top:8px'>Supports JPG, JPEG, PNG, WEBP</div></div>", unsafe_allow_html=True)
+                st.markdown("<div style='border:2px dashed #b0c4de;border-radius:14px;padding:48px 24px;text-align:center;background:#f7f9fc'><div style='font-size:2.5rem'>📂</div><div style='font-family:Orbitron,monospace;color:#0077aa;margin-top:12px'>Drag and Drop your image here</div><div style='font-size:.8rem;margin-top:8px'>Supports JPG, JPEG, PNG, WEBP</div></div>", unsafe_allow_html=True)
 
-        # FIX: Render recs from session_state — survives rating reruns
         recs = st.session_state.get("current_recs", [])
         if recs:
-            # Show mood card if available
             if "current_mood" in st.session_state:
                 em, sc, fl, method = st.session_state["current_mood"]
                 mood_card(em, sc, fl, method)
@@ -694,7 +720,7 @@ def main_app(username):
             for i, r in enumerate(recs):
                 song_card(r, username, i)
         st.markdown("---")
-        st.caption("💡 Tip: Good lighting improves face detection accuracy.")
+        st.caption("💡 Tip: Smile clearly for best face detection results!")
 
     # ── TAB 2: PLAYLISTS ─────────────────────────────────────────────────
     with tabs[1]:
@@ -705,10 +731,9 @@ def main_app(username):
                 if new_pl.strip():
                     ok = save_playlist(username, new_pl.strip(), [])
                     if ok: st.success(f"✅ Playlist '{new_pl}' created!"); st.rerun()
-                    else: st.error("❌ Could not save. Check file permissions.")
+                    else:  st.error("❌ Could not save. Check file permissions.")
                 else: st.warning("Please enter a name.")
 
-        # FIX: Always read fresh from disk — shows real song count
         playlists = get_user_playlists(username)
         if not playlists:
             st.info("No playlists yet. Create one above, then add songs from Discover!")
@@ -732,15 +757,11 @@ def main_app(username):
                                     </div>
                                 </div>""", unsafe_allow_html=True)
                             with c2:
-                                # FIX: Remove individual song from playlist
                                 safe_song = re.sub(r"[^a-zA-Z0-9]", "_", s['song'])[:20]
                                 if st.button("🗑️", key=f"rm_{pl_name}_{safe_song}", help=f"Remove {s['song']}"):
                                     data = _load_json(PLAYLIST_FILE, {})
                                     if username in data and pl_name in data[username]:
-                                        data[username][pl_name] = [
-                                            x for x in data[username][pl_name]
-                                            if x["song"] != s["song"]
-                                        ]
+                                        data[username][pl_name] = [x for x in data[username][pl_name] if x["song"] != s["song"]]
                                         _save_json(PLAYLIST_FILE, data)
                                         st.rerun()
                     else:
@@ -752,7 +773,6 @@ def main_app(username):
     with tabs[2]:
         st.subheader("Your Mood Analytics")
         history  = get_history(username)
-        # FIX: Always re-read feedback fresh here
         feedback = get_feedback(username)
 
         if not history:
@@ -793,10 +813,9 @@ def main_app(username):
                     <div class='history-mood'>{meta['emoji']} {h['emotion']} — {h['mood']}</div>
                 </div>""", unsafe_allow_html=True)
 
-        # RATINGS — always re-read fresh from disk
         st.markdown("---")
         st.markdown("#### ⭐ Your Song Ratings")
-        feedback = get_feedback(username)  # Fresh read
+        feedback = get_feedback(username)
         if not feedback:
             st.info("You haven't rated any songs yet. Rate songs from the Discover tab!")
         else:
@@ -818,10 +837,10 @@ def main_app(username):
 
             st.markdown("##### 📝 All Your Rated Songs")
             for fb in reversed(feedback):
-                rating  = int(fb.get("rating",0))
-                stars   = "⭐" * rating + "☆" * (5-rating)
-                ts      = fb.get("timestamp","")[:16].replace("T"," ")
-                comment = fb.get("comment","").strip()
+                rating   = int(fb.get("rating",0))
+                stars    = "⭐" * rating + "☆" * (5-rating)
+                ts       = fb.get("timestamp","")[:16].replace("T"," ")
+                comment  = fb.get("comment","").strip()
                 cmt_html = f"<div class='rating-comment'>💬 {comment}</div>" if comment else "<div class='rating-comment' style='color:#aaa'>No comment</div>"
                 st.markdown(f"""
                 <div class='rating-card'>
@@ -920,27 +939,24 @@ feedback_file_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_
         with c4:
             if st.button("Clear All Ratings"):
                 d = _load_json(FEEDBACK_FILE,{}); d[username]=[]; _save_json(FEEDBACK_FILE,d)
-                for k in [k for k in st.session_state if k.startswith(f"rated_{username}_")]: del st.session_state[k]
+                for k in [k for k in st.session_state if k.startswith(f"rated_{username}_")]:
+                    del st.session_state[k]
                 st.success("Ratings cleared.")
 
         st.markdown("---")
         st.markdown("""
-#### ℹ️ About MoodTunes v3.1 — All Bugs Fixed
+#### ℹ️ About MoodTunes v3.3 — Smile Detection Edition
 
-**What was fixed in v3.1:**
-- ✅ Playlist song count always correct — reads fresh from disk every render
-- ✅ Songs actually add to playlist — removed broken verify step
-- ✅ Add button no longer clears song list — result stored in session_state, no rerun
-- ✅ Ratings & comments save correctly — upsert logic (update if exists)
-- ✅ Song list survives rating save rerun — recs stored in session_state
-- ✅ Analytics shows all rated songs — always reads fresh from disk
-- ✅ Existing ratings load on Discover — checks disk if not in session_state
-- ✅ Remove individual songs from playlist — new per-song delete button
-- ✅ All file paths absolute using __file__
+**What is new in v3.3:**
+- ✅ Smile detection using OpenCV haarcascade smile detector
+- ✅ Histogram equalisation for dark photos — works even with dark background
+- ✅ Happy photo now shows Happy mood correctly
+- ✅ No tensorflow or deepface needed
+- ✅ All previous fixes retained
 
-**Stack:** Python · Streamlit · VADER · TextBlob · DeepFace · Scikit-learn · Plotly · Open-Meteo
+**Stack:** Python · Streamlit · VADER · TextBlob · OpenCV · Scikit-learn · Plotly · Open-Meteo
         """)
-        st.caption("MoodTunes v3.1 · All Bugs Fixed")
+        st.caption("MoodTunes v3.3 · Smile Detection Edition")
 
 
 # ══════════════════════════════════════════════════════════════════════════
