@@ -15,7 +15,4 @@ Based on the detected emotion, the system recommends songs that match, support, 
 Every suggested song comes with explainable reasoning and direct ▶️ Spotify and ▶️ YouTube play buttons.
 
 🌐 Live Demo
-https://moodtunes-ai-powered-mood-based-music-recommendation-system-ak.streamlit.app/
-
-
-
+(https://moodtunes-ai-powered-mood-based-music-recommendation-system-ak.streamlit.app/)
