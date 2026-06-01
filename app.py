@@ -617,7 +617,7 @@ def login_page():
             st.markdown("<br>", unsafe_allow_html=True)
             u  = st.text_input("Username", key="li_u")
             p  = st.text_input("Password", type="password", key="li_p")
-            if st.button("Login →", use_container_width=True):
+            if st.button("Login →", width="stretch"):
                 if verify_user(u, p):
                     st.session_state.update({"logged_in":True,"username":u})
                     st.rerun()
@@ -627,7 +627,7 @@ def login_page():
             st.markdown("<br>", unsafe_allow_html=True)
             nu  = st.text_input("Choose Username", key="su_u")
             np_ = st.text_input("Choose Password", type="password", key="su_p")
-            if st.button("Create Account →", use_container_width=True):
+            if st.button("Create Account →", width="stretch"):
                 ok, msg = save_user(nu, np_)
                 (st.success if ok else st.error)(msg)
 
@@ -706,7 +706,7 @@ def main_app(username):
             with c2:
                 st.markdown("📷 Capture face (optional)")
                 camera_image = st.camera_input("Webcam capture", key="cam1")
-            if st.button("🔮 Recommend Songs", use_container_width=True):
+            if st.button("🔮 Recommend Songs", width="stretch"):
                 with st.spinner("Analysing mood…"):
                     recs, error = get_recommendations(
                         user_input, camera_image,
@@ -733,7 +733,7 @@ def main_app(username):
         # ── FACE CAMERA ──────────────────────────────────────────────────
         elif "📷" in input_method:
             camera_image = st.camera_input("📷 Capture your face", key="cam2")
-            if st.button("🔮 Analyse My Face", use_container_width=True):
+            if st.button("🔮 Analyse My Face", width="stretch"):
                 if camera_image:
                     with st.spinner("Detecting emotion…"):
                         pil = Image.open(io.BytesIO(camera_image.getvalue()))
@@ -757,7 +757,7 @@ def main_app(username):
         # ── WEATHER ──────────────────────────────────────────────────────
         elif "🌦️" in input_method:
             city = st.text_input("🏙️ Enter your city", placeholder="Mumbai, Delhi, London…")
-            if st.button("🔮 Mood from Weather", use_container_width=True):
+            if st.button("🔮 Mood from Weather", width="stretch"):
                 if city.strip():
                     with st.spinner(f"Fetching weather for {city}…"):
                         desc, temp = get_weather(city)
@@ -796,7 +796,7 @@ def main_app(username):
                         f"**Size:** {uploaded_file.size/1024:.1f} KB\n\n"
                         f"**Dim:** {pil_image.width}×{pil_image.height} px"
                     )
-                if st.button("🔮 Detect Emotion from Image", use_container_width=True):
+                if st.button("🔮 Detect Emotion from Image", width="stretch"):
                     with st.spinner("Analysing your expression…"):
                         dom = detect_face_emotion_from_image(pil_image)
                     if dom:
@@ -923,7 +923,7 @@ def main_app(username):
                              color_discrete_map={k:v["color"] for k,v in EMOTION_MAP.items()},
                              template="plotly_white")
                 fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             except ImportError:
                 st.bar_chart(ec_df.set_index("Emotion"))
 
@@ -933,7 +933,7 @@ def main_app(username):
                 fig_m = px.pie(md_df, values="Count", names="Method", template="plotly_white",
                                color_discrete_sequence=["#0077aa","#228855","#FFD700","#FF69B4"])
                 fig_m.update_layout(paper_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig_m, use_container_width=True)
+                st.plotly_chart(fig_m, width="stretch")
             except Exception:
                 st.bar_chart(md_df.set_index("Method"))
 
@@ -966,7 +966,7 @@ def main_app(username):
                 fig_r = px.bar(rd, x="Stars", y="Count", template="plotly_white",
                                color_discrete_sequence=["#FFD700"], title="Your Rating Distribution")
                 fig_r.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
-                st.plotly_chart(fig_r, use_container_width=True)
+                st.plotly_chart(fig_r, width="stretch")
             except Exception:
                 pass
 
@@ -992,7 +992,7 @@ def main_app(username):
             with st.expander("📊 Table View"):
                 fb_df = pd.DataFrame(feedback)[["song","artist","rating","comment","timestamp"]]
                 fb_df["timestamp"] = fb_df["timestamp"].str[:16].str.replace("T"," ")
-                st.dataframe(fb_df.sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True)
+                st.dataframe(fb_df.sort_values("timestamp", ascending=False), width="stretch", hide_index=True)
 
     # ── TAB 4: EXPLORE ───────────────────────────────────────────────────
     with tabs[3]:
@@ -1007,7 +1007,7 @@ def main_app(username):
                 fig2 = px.pie(ec, values="Count", names="Emotion", template="plotly_white",
                               color_discrete_sequence=["#FFD700","#FF69B4","#87CEEB","#6495ED","#8B5CF6"])
                 fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(fig2, width="stretch")
             except ImportError:
                 st.bar_chart(ec.set_index("Emotion"))
         with c2:
@@ -1040,7 +1040,7 @@ def main_app(username):
             fig3 = px.bar(gc, x="Genre", y="Count", template="plotly_white",
                           color="Count", color_continuous_scale=["#b0c4de","#0077aa"])
             fig3.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
-            st.plotly_chart(fig3, use_container_width=True)
+            st.plotly_chart(fig3, width="stretch")
         except ImportError:
             st.bar_chart(gc.set_index("Genre"))
         st.markdown("#### 📈 Sentiment Distribution")
@@ -1049,7 +1049,7 @@ def main_app(username):
             fig4 = px.histogram(df, x="sentiment_score", nbins=50, template="plotly_white",
                                 color_discrete_sequence=["#0077aa"])
             fig4.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig4, use_container_width=True)
+            st.plotly_chart(fig4, width="stretch")
         except ImportError:
             st.bar_chart(df["sentiment_score"].value_counts())
 
