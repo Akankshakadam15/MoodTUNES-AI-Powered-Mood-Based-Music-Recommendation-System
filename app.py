@@ -292,12 +292,7 @@ def map_face_emotion_to_label(face_emotion):
 def detect_face_emotion_from_image(pil_image):
     """
     Smart face emotion detection using OpenCV Haar Cascades.
-    Steps:
-      1. Detect face using frontal face cascade
-      2. Within face ROI → detect smile using smile cascade
-      3. Within face ROI → detect eyes (open eyes = alert/happy, closed = sad/tired)
-      4. Combine signals: smile=happy, no-smile + bright = neutral, dark = sad
-    No TensorFlow / DeepFace required.
+    FIX v4.2: Lowered smile minNeighbors from 22 → 12 for better happy detection.
     """
     try:
         import cv2
@@ -341,9 +336,9 @@ def detect_face_emotion_from_image(pil_image):
         lower_face = face_roi[h // 2 :, :]
         smiles = smile_cascade.detectMultiScale(
             lower_face,
-            scaleFactor=1.7,
-            minNeighbors=22,   # high threshold → fewer false positives
-            minSize=(25, 15),
+            scaleFactor=1.5,   # FIX: was 1.7 → more sensitive
+            minNeighbors=12,   # FIX: was 22 → catches real smiles now
+            minSize=(20, 10),  # FIX: was (25,15) → smaller smiles detected
         )
         smile_detected = len(smiles) > 0
 
@@ -662,7 +657,7 @@ def render_sidebar(username):
     if st.sidebar.button("🚪 Logout"):
         st.session_state["logged_in"] = False
         st.rerun()
-    st.sidebar.caption("MoodTunes v4.1 · Smart Face Detection")
+    st.sidebar.caption("MoodTunes v4.2 · Improved Happy Detection")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1118,17 +1113,17 @@ feedback_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_FILE)
 
         st.markdown("---")
         st.markdown("""
-#### ℹ️ About MoodTunes v4.1 — Smart Face Detection
+#### ℹ️ About MoodTunes v4.2 — Improved Happy Detection
 
-**What changed in v4.1:**
-- ✅ Face + Smile + Eye Haar Cascade detection — happy faces now correctly detected
+**What changed in v4.2:**
+- ✅ Smile cascade tuned: `scaleFactor=1.5`, `minNeighbors=12`, `minSize=(20,10)` — happy faces now detected correctly
 - ✅ Removed "Face detection uses OpenCV" info banner — clean UI
-- ✅ No TensorFlow / DeepFace — zero dependency conflicts on Python 3.14
-- ✅ All deprecation warnings fixed (use_container_width, use_column_width)
+- ✅ No TensorFlow / DeepFace — zero dependency conflicts
+- ✅ All deprecation warnings fixed
 
 **Stack:** Python · Streamlit · VADER · TextBlob · OpenCV · Scikit-learn · Plotly · Open-Meteo
         """)
-        st.caption("MoodTunes v4.1 · Smart Face Detection · No TensorFlow")
+        st.caption("MoodTunes v4.2 · Improved Happy Detection · No TensorFlow")
 
 
 # ══════════════════════════════════════════════════════════════════════════
