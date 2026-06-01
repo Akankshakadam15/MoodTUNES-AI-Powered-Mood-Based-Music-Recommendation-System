@@ -1,5 +1,5 @@
 #╔══════════════════════════════════════════════════════════════════════════╗
-# ║           MOODTUNES – AI Mood-Based Music Recommender            ║
+# ║           MOODTUNES – AI Powered Mood-Based Music Recommendation System           ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 import urllib.parse
@@ -144,7 +144,7 @@ def get_user_color(username):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# PLAYLIST — FIX: removed strict verify check that caused false failures
+# PLAYLIST
 # ══════════════════════════════════════════════════════════════════════════
 def get_user_playlists(username):
     return _load_json(PLAYLIST_FILE, {}).get(username, {})
@@ -161,7 +161,6 @@ def delete_playlist(username, pl_name):
         _save_json(PLAYLIST_FILE, data)
 
 def add_song_to_playlist(username, pl_name, song_dict):
-    # FIX: read → check dup → append → write. No broken verify step.
     data = _load_json(PLAYLIST_FILE, {})
     if username not in data:
         data[username] = {}
@@ -195,20 +194,18 @@ def get_history(username):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# FEEDBACK / RATINGS — FIX: always reads fresh, never relies on session state
+# FEEDBACK / RATINGS
 # ══════════════════════════════════════════════════════════════════════════
 def save_feedback(username, song, artist, rating, comment=""):
     data = _load_json(FEEDBACK_FILE, {})
     if username not in data:
         data[username] = []
-    # FIX: update existing rating for same song instead of duplicating
     for existing in data[username]:
         if existing["song"] == str(song).strip() and existing["artist"] == str(artist).strip():
             existing["rating"]    = int(rating)
             existing["comment"]   = str(comment).strip()
             existing["timestamp"] = datetime.datetime.now().isoformat()
             return _save_json(FEEDBACK_FILE, data)
-    # New rating
     data[username].append({
         "timestamp": datetime.datetime.now().isoformat(),
         "song":    str(song).strip(),
@@ -222,7 +219,6 @@ def get_feedback(username):
     return _load_json(FEEDBACK_FILE, {}).get(username, [])
 
 def get_song_feedback(username, song, artist):
-    """Get existing feedback for a specific song."""
     for fb in get_feedback(username):
         if fb["song"] == str(song).strip() and fb["artist"] == str(artist).strip():
             return fb
@@ -431,7 +427,6 @@ def song_card(r, username, idx):
     </div>""", unsafe_allow_html=True)
 
     # ── ADD TO PLAYLIST ──────────────────────────────────────────────────
-    # FIX: Store add result in session_state keyed by song+playlist, never rerun
     playlists = get_user_playlists(username)
     pl_names  = list(playlists.keys())
 
@@ -445,14 +440,12 @@ def song_card(r, username, idx):
                              "emotion": r["emotion"], "genre": r.get("genre","—")}
                 success, reason = add_song_to_playlist(username, chosen, song_dict)
                 if success:
-                    # FIX: store success message without rerun so recs list stays
                     st.session_state[f"add_msg_{idx}"] = ("success", f"✅ Added **{r['song']}** to **{chosen}**!")
                 elif reason == "already_exists":
                     st.session_state[f"add_msg_{idx}"] = ("warning", "⚠️ Already in that playlist.")
                 else:
                     st.session_state[f"add_msg_{idx}"] = ("error", f"❌ Save failed ({reason}). Check file permissions.")
 
-        # Show add message if present
         msg_key = f"add_msg_{idx}"
         if msg_key in st.session_state:
             kind, msg = st.session_state[msg_key]
@@ -463,11 +456,9 @@ def song_card(r, username, idx):
         st.caption("📋 No playlists yet — create one in the Playlists tab first.")
 
     # ── RATE THIS SONG ───────────────────────────────────────────────────
-    # FIX: Read existing rating from disk directly, not just session_state
     safe  = re.sub(r"[^a-zA-Z0-9]", "_", r["song"])[:40]
     s_key = f"rated_{username}_{safe}"
 
-    # Check disk for existing rating if not in session state
     if s_key not in st.session_state:
         existing_fb = get_song_feedback(username, r["song"], r["artist"])
         if existing_fb:
@@ -552,7 +543,7 @@ def render_sidebar(username):
     if st.sidebar.button("🚪 Logout"):
         st.session_state["logged_in"] = False
         st.rerun()
-    st.sidebar.caption("MoodTunes v3.1 · Fixed Edition")
+    st.sidebar.caption("MoodTunes v3.2 · Warnings Fixed")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -580,7 +571,6 @@ def main_app(username):
             with a2: top_n = st.slider("Songs to Recommend", 5, 20, 10)
             with a3: diversity = st.checkbox("Artist Diversity Mode", value=False)
 
-        # FIX: Store recs in session_state so they survive reruns (from rating save)
         if "current_recs" not in st.session_state:
             st.session_state["current_recs"] = []
 
@@ -663,8 +653,11 @@ def main_app(username):
             if uploaded_file:
                 pil_image = Image.open(uploaded_file)
                 c1,c2 = st.columns(2)
-                with c1: st.image(pil_image, caption="Uploaded Image", use_column_width=True)
-                with c2: st.markdown(f"**File:** {uploaded_file.name}\n\n**Size:** {uploaded_file.size/1024:.1f} KB\n\n**Dim:** {pil_image.width}×{pil_image.height} px")
+                with c1:
+                    # FIX: replaced use_column_width=True with width=400 to remove deprecation warning
+                    st.image(pil_image, caption="Uploaded Image", width=400)
+                with c2:
+                    st.markdown(f"**File:** {uploaded_file.name}\n\n**Size:** {uploaded_file.size/1024:.1f} KB\n\n**Dim:** {pil_image.width}×{pil_image.height} px")
                 if st.button("🔮 Detect Emotion from Image", use_container_width=True):
                     with st.spinner("Analysing…"):
                         dom = detect_face_emotion_from_image(pil_image)
@@ -683,10 +676,9 @@ def main_app(username):
             else:
                 st.markdown("<div style='border:2px dashed #b0c4de;border-radius:14px;padding:48px 24px;text-align:center;background:#f7f9fc'><div style='font-size:2.5rem'>📂</div><div style='font-family:Orbitron,monospace;color:#0077aa;margin-top:12px'>Drag & Drop your image here</div><div style='font-size:.8rem;margin-top:8px'>Supports JPG, JPEG, PNG, WEBP</div></div>", unsafe_allow_html=True)
 
-        # FIX: Render recs from session_state — survives rating reruns
+        # Render recs from session_state — survives rating reruns
         recs = st.session_state.get("current_recs", [])
         if recs:
-            # Show mood card if available
             if "current_mood" in st.session_state:
                 em, sc, fl, method = st.session_state["current_mood"]
                 mood_card(em, sc, fl, method)
@@ -708,7 +700,6 @@ def main_app(username):
                     else: st.error("❌ Could not save. Check file permissions.")
                 else: st.warning("Please enter a name.")
 
-        # FIX: Always read fresh from disk — shows real song count
         playlists = get_user_playlists(username)
         if not playlists:
             st.info("No playlists yet. Create one above, then add songs from Discover!")
@@ -732,7 +723,6 @@ def main_app(username):
                                     </div>
                                 </div>""", unsafe_allow_html=True)
                             with c2:
-                                # FIX: Remove individual song from playlist
                                 safe_song = re.sub(r"[^a-zA-Z0-9]", "_", s['song'])[:20]
                                 if st.button("🗑️", key=f"rm_{pl_name}_{safe_song}", help=f"Remove {s['song']}"):
                                     data = _load_json(PLAYLIST_FILE, {})
@@ -752,7 +742,6 @@ def main_app(username):
     with tabs[2]:
         st.subheader("Your Mood Analytics")
         history  = get_history(username)
-        # FIX: Always re-read feedback fresh here
         feedback = get_feedback(username)
 
         if not history:
@@ -793,10 +782,9 @@ def main_app(username):
                     <div class='history-mood'>{meta['emoji']} {h['emotion']} — {h['mood']}</div>
                 </div>""", unsafe_allow_html=True)
 
-        # RATINGS — always re-read fresh from disk
         st.markdown("---")
         st.markdown("#### ⭐ Your Song Ratings")
-        feedback = get_feedback(username)  # Fresh read
+        feedback = get_feedback(username)
         if not feedback:
             st.info("You haven't rated any songs yet. Rate songs from the Discover tab!")
         else:
@@ -925,22 +913,16 @@ feedback_file_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_
 
         st.markdown("---")
         st.markdown("""
-#### ℹ️ About MoodTunes v3.1 — All Bugs Fixed
+#### ℹ️ About MoodTunes v3.2 — Warnings Fixed
 
-**What was fixed in v3.1:**
-- ✅ Playlist song count always correct — reads fresh from disk every render
-- ✅ Songs actually add to playlist — removed broken verify step
-- ✅ Add button no longer clears song list — result stored in session_state, no rerun
-- ✅ Ratings & comments save correctly — upsert logic (update if exists)
-- ✅ Song list survives rating save rerun — recs stored in session_state
-- ✅ Analytics shows all rated songs — always reads fresh from disk
-- ✅ Existing ratings load on Discover — checks disk if not in session_state
-- ✅ Remove individual songs from playlist — new per-song delete button
-- ✅ All file paths absolute using __file__
+**What was fixed in v3.2:**
+- ✅ `use_column_width=True` replaced with `width=400` in st.image — removes deprecation warning
+- ✅ DeepFace + tf-keras added to requirements.txt — fixes "DeepFace not installed" warning
+- ✅ All v3.1 fixes retained (playlist, ratings, session_state, file paths)
 
 **Stack:** Python · Streamlit · VADER · TextBlob · DeepFace · Scikit-learn · Plotly · Open-Meteo
         """)
-        st.caption("MoodTunes v3.1 · All Bugs Fixed")
+        st.caption("MoodTunes v3.2 · Warnings Fixed")
 
 
 # ══════════════════════════════════════════════════════════════════════════
