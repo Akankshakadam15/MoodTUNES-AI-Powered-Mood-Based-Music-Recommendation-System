@@ -20,8 +20,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from PIL import Image
 
-DEEPFACE_AVAILABLE = False
-
 st.set_page_config(
     page_title="MoodTunes – AI Music Recommender",
     page_icon="🎧",
@@ -34,6 +32,8 @@ USER_FILE     = os.path.join(BASE_DIR, "users.csv")
 PLAYLIST_FILE = os.path.join(BASE_DIR, "playlists.json")
 HISTORY_FILE  = os.path.join(BASE_DIR, "history.json")
 FEEDBACK_FILE = os.path.join(BASE_DIR, "feedback.json")
+MODEL_FILE    = os.path.join(BASE_DIR, "emotion_model.pkl")
+TFIDF_FILE    = os.path.join(BASE_DIR, "tfidf.pkl")
 
 st.markdown("""
 <style>
@@ -76,6 +76,24 @@ h1,h2,h3{font-family:'Orbitron',monospace;color:#1a1a2e;}
 .rating-time{color:#aaaacc;font-size:.72rem;margin-top:2px;}
 </style>
 """, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# LOAD ML MODEL (emotion_model.pkl + tfidf.pkl)
+# ══════════════════════════════════════════════════════════════════════════
+@st.cache_resource
+def load_ml_model():
+    try:
+        import joblib
+        if os.path.exists(MODEL_FILE) and os.path.exists(TFIDF_FILE):
+            model = joblib.load(MODEL_FILE)
+            tfidf_model = joblib.load(TFIDF_FILE)
+            return model, tfidf_model
+    except Exception:
+        pass
+    return None, None
+
+ml_model, ml_tfidf = load_ml_model()
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -267,11 +285,37 @@ EMOTION_MAP = {
     "Deep Sad":            {"emoji":"💔","color":"#8B5CF6"},
 }
 
+# ML Model emotion → app emotion mapping
+ML_EMOTION_MAP = {
+    "Happy":    ("Happy / Energetic",   0.8,  "Happy"),
+    "Sad":      ("Sad",                -0.5,  "Sad"),
+    "Calm":     ("Neutral / Calm",      0.0,  "Calm"),
+    "Romantic": ("Romantic / Positive", 0.4,  "Romantic"),
+    "Dark":     ("Deep Sad",           -0.8,  "Dark / Deep"),
+}
+
 
 # ══════════════════════════════════════════════════════════════════════════
-# MOOD DETECTION
+# MOOD DETECTION — TEXT (ML Model + VADER fallback)
 # ══════════════════════════════════════════════════════════════════════════
+def clean_text_for_model(text):
+    return re.sub(r"[^a-zA-Z\s]", "", str(text)).lower().strip()
+
 def detect_user_mood_from_text(text):
+    # Try ML model first
+    if ml_model is not None and ml_tfidf is not None:
+        try:
+            cleaned = clean_text_for_model(text)
+            vec     = ml_tfidf.transform([cleaned])
+            pred    = ml_model.predict(vec)[0]
+            emotion_label, score, feeling = ML_EMOTION_MAP.get(
+                pred, ("Neutral / Calm", 0.0, "Neutral")
+            )
+            return score, feeling, pred, emotion_label
+        except Exception:
+            pass
+
+    # Fallback: VADER
     score = analyzer.polarity_scores(text)["compound"]
     if score >  0.6: return score, "Happy",    "Energetic",    "Happy / Energetic"
     if score >  0.2: return score, "Positive", "Romantic",     "Romantic / Positive"
@@ -279,6 +323,10 @@ def detect_user_mood_from_text(text):
     if score > -0.6: return score, "Sad",      "Calm",         "Sad"
     return score, "Very Sad", "Motivational", "Deep Sad"
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# MOOD DETECTION — FACE (OpenCV)
+# ══════════════════════════════════════════════════════════════════════════
 def map_face_emotion_to_label(face_emotion):
     e = str(face_emotion).lower()
     if "happy"    in e or "joy"     in e: return  0.8, "Happy",     "Energetic", "Happy / Energetic"
@@ -290,109 +338,91 @@ def map_face_emotion_to_label(face_emotion):
 
 
 def detect_face_emotion_from_image(pil_image):
-    """
-    Smart face emotion detection using OpenCV Haar Cascades.
-    FIX v4.2: Lowered smile minNeighbors from 22 → 12 for better happy detection.
-    """
     try:
         import cv2
 
         img  = np.array(pil_image.convert("RGB"))
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
-        # ── 1. Detect face ────────────────────────────────────────────
         face_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
         faces = face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.1,
-            minNeighbors=4,
-            minSize=(60, 60),
-            flags=cv2.CASCADE_SCALE_IMAGE,
+            gray, scaleFactor=1.1, minNeighbors=4,
+            minSize=(60, 60), flags=cv2.CASCADE_SCALE_IMAGE,
         )
-
         if len(faces) == 0:
-            # Try with relaxed params (selfie / angled face)
             faces = face_cascade.detectMultiScale(
-                gray,
-                scaleFactor=1.05,
-                minNeighbors=2,
-                minSize=(40, 40),
+                gray, scaleFactor=1.05, minNeighbors=2, minSize=(40, 40),
             )
-
         if len(faces) == 0:
-            return None   # No face found at all
+            return None
 
-        # Use the largest detected face
         x, y, w, h = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)[0]
-        face_roi   = gray[y : y + h, x : x + w]
+        face_roi    = gray[y: y + h, x: x + w]
 
-        # ── 2. Smile detection inside face ROI ────────────────────────
         smile_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_smile.xml"
         )
-        # Focus on lower half of face for smile (mouth region)
-        lower_face = face_roi[h // 2 :, :]
-        smiles = smile_cascade.detectMultiScale(
-            lower_face,
-            scaleFactor=1.5,   # FIX: was 1.7 → more sensitive
-            minNeighbors=12,   # FIX: was 22 → catches real smiles now
-            minSize=(20, 10),  # FIX: was (25,15) → smaller smiles detected
+        lower_face     = face_roi[h // 2:, :]
+        smiles         = smile_cascade.detectMultiScale(
+            lower_face, scaleFactor=1.5, minNeighbors=12, minSize=(20, 10),
         )
         smile_detected = len(smiles) > 0
 
-        # ── 3. Eye detection inside face ROI ─────────────────────────
-        eye_cascade = cv2.CascadeClassifier(
+        eye_cascade    = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_eye.xml"
         )
-        upper_face  = face_roi[: h // 2, :]
-        eyes        = eye_cascade.detectMultiScale(upper_face, scaleFactor=1.1, minNeighbors=5)
-        eyes_open   = len(eyes) >= 1
+        upper_face     = face_roi[: h // 2, :]
+        eyes           = eye_cascade.detectMultiScale(upper_face, scaleFactor=1.1, minNeighbors=5)
+        both_eyes_open = len(eyes) >= 2
 
-        # ── 4. Brightness of face region ─────────────────────────────
         face_brightness = float(np.mean(face_roi))
+        face_variance   = float(np.var(face_roi))
+        mouth_region    = face_roi[int(h * 0.65): int(h * 0.85), int(w * 0.2): int(w * 0.8)]
+        mouth_brightness= float(np.mean(mouth_region)) if mouth_region.size > 0 else 128
 
-        # ── 5. Classify ───────────────────────────────────────────────
         if smile_detected:
             return "happy"
-        elif not eyes_open and face_brightness < 90:
-            return "sad"
-        elif face_brightness > 150 and eyes_open:
-            return "neutral"
-        elif face_brightness < 70:
-            return "sad"
-        else:
-            return "neutral"
+
+        sad_score = 0
+        if face_variance   < 1800: sad_score += 1
+        if not both_eyes_open:     sad_score += 1
+        if mouth_brightness < 100: sad_score += 1
+        if face_brightness  < 100: sad_score += 1
+
+        return "sad" if sad_score >= 2 else "neutral"
 
     except Exception as e:
         st.error(f"Face detection error: {e}")
         return None
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# WEATHER MOOD
+# ══════════════════════════════════════════════════════════════════════════
 def weather_to_mood(weather_desc):
     w = weather_desc.lower()
-    if any(k in w for k in ["clear","sun"]):              return  0.7, "Happy / Energetic"
-    if any(k in w for k in ["cloud","overcast"]):         return  0.0, "Neutral / Calm"
-    if any(k in w for k in ["rain","drizzle","shower"]):  return -0.4, "Sad"
-    if any(k in w for k in ["storm","thunder","snow"]):   return -0.7, "Deep Sad"
-    if any(k in w for k in ["fog","mist","haze"]):        return -0.1, "Neutral / Calm"
+    if any(k in w for k in ["clear","sun"]):             return  0.7, "Happy / Energetic"
+    if any(k in w for k in ["cloud","overcast"]):        return  0.0, "Neutral / Calm"
+    if any(k in w for k in ["rain","drizzle","shower"]): return -0.4, "Sad"
+    if any(k in w for k in ["storm","thunder","snow"]):  return -0.7, "Deep Sad"
+    if any(k in w for k in ["fog","mist","haze"]):       return -0.1, "Neutral / Calm"
     return 0.0, "Neutral / Calm"
 
 def _wmo_code(code):
-    if code == 0:              return "Clear sky"
-    if code in [1,2,3]:        return "Cloudy"
-    if code in range(51,68):   return "Rainy"
-    if code in range(71,78):   return "Snowy"
-    if code in range(80,83):   return "Rain showers"
-    if code in range(95,100):  return "Thunderstorm"
+    if code == 0:             return "Clear sky"
+    if code in [1,2,3]:       return "Cloudy"
+    if code in range(51,68):  return "Rainy"
+    if code in range(71,78):  return "Snowy"
+    if code in range(80,83):  return "Rain showers"
+    if code in range(95,100): return "Thunderstorm"
     return "Cloudy"
 
 def get_weather(city):
     try:
         geo = requests.get(
-            f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1",
-            timeout=5
+            f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1", timeout=5
         ).json()
         if not geo.get("results"):
             return None, None
@@ -400,11 +430,10 @@ def get_weather(city):
         lon = geo["results"][0]["longitude"]
         wx  = requests.get(
             f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-            f"&current_weather=true&forecast_days=1",
-            timeout=5
+            f"&current_weather=true&forecast_days=1", timeout=5
         ).json()
-        code = wx.get("current_weather",{}).get("weathercode",0)
-        temp = wx.get("current_weather",{}).get("temperature","?")
+        code = wx.get("current_weather", {}).get("weathercode", 0)
+        temp = wx.get("current_weather", {}).get("temperature", "?")
         return _wmo_code(code), temp
     except Exception:
         return None, None
@@ -418,13 +447,19 @@ def recommend_by_emotion_label(emotion_label, input_score, user_text,
                                 genre_filter=None, diversity=False):
     pool = df[df["emotion"] == emotion_label].copy()
     if pool.empty:
-        return None, f"No songs found for: {emotion_label}"
+        # fallback to closest emotion
+        pool = df.copy()
+        pool["sentiment_diff"] = abs(pool["sentiment_score"] - input_score)
+        pool = pool.sort_values("sentiment_diff").head(top_n * 2)
+
     if genre_filter and genre_filter != "All":
         filtered = pool[pool["genre"] == genre_filter]
         if not filtered.empty:
             pool = filtered
+
     pool["sentiment_diff"] = abs(pool["sentiment_score"] - input_score)
     pool = pool.sort_values("sentiment_diff")
+
     if diversity:
         seen, rows = set(), []
         for _, row in pool.iterrows():
@@ -436,15 +471,16 @@ def recommend_by_emotion_label(emotion_label, input_score, user_text,
         pool = pd.DataFrame(rows)
     else:
         pool = pool.head(top_n)
+
     results = []
     for _, row in pool.iterrows():
         match_pct = min(100, max(0, round((1 - abs(row["sentiment_score"] - input_score) / 2) * 100)))
         results.append({
-            "song":    row["song"],
-            "artist":  row["artist"],
-            "emotion": row["emotion"],
-            "genre":   row.get("genre","—"),
-            "match":   match_pct,
+            "song":   row["song"],
+            "artist": row["artist"],
+            "emotion":row["emotion"],
+            "genre":  row.get("genre", "—"),
+            "match":  match_pct,
         })
     return results, None
 
@@ -474,13 +510,9 @@ def content_similar(song_name, top_n=6):
     idx    = idx_list[0]
     scores = sorted(enumerate(cosine_sim[idx]), key=lambda x: x[1], reverse=True)[1:top_n+1]
     return [
-        {
-            "song":       df.iloc[i]["song"],
-            "artist":     df.iloc[i]["artist"],
-            "emotion":    df.iloc[i]["emotion"],
-            "genre":      df.iloc[i].get("genre","—"),
-            "similarity": round(s*100),
-        }
+        {"song": df.iloc[i]["song"], "artist": df.iloc[i]["artist"],
+         "emotion": df.iloc[i]["emotion"], "genre": df.iloc[i].get("genre","—"),
+         "similarity": round(s*100)}
         for i, s in scores
     ]
 
@@ -488,12 +520,8 @@ def compute_stats(username):
     history   = get_history(username)
     playlists = get_user_playlists(username)
     top_e     = Counter(h["emotion"] for h in history).most_common(1)
-    return (
-        len(history),
-        sum(len(v) for v in playlists.values()),
-        top_e[0][0] if top_e else "—",
-        len(playlists),
-    )
+    return (len(history), sum(len(v) for v in playlists.values()),
+            top_e[0][0] if top_e else "—", len(playlists))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -534,55 +562,42 @@ def song_card(r, username, idx):
         </div>
     </div>""", unsafe_allow_html=True)
 
-    # ── ADD TO PLAYLIST ──────────────────────────────────────────────────
     playlists = get_user_playlists(username)
     pl_names  = list(playlists.keys())
-
     if pl_names:
         col_a, col_b = st.columns([3,1])
         with col_a:
             chosen = st.selectbox("Playlist", pl_names, key=f"pls_{idx}", label_visibility="collapsed")
         with col_b:
             if st.button("➕ Add", key=f"add_{idx}"):
-                song_dict = {
-                    "song":    r["song"],
-                    "artist":  r["artist"],
-                    "emotion": r["emotion"],
-                    "genre":   r.get("genre","—"),
-                }
+                song_dict = {"song":r["song"],"artist":r["artist"],
+                             "emotion":r["emotion"],"genre":r.get("genre","—")}
                 success, reason = add_song_to_playlist(username, chosen, song_dict)
                 if success:
-                    st.session_state[f"add_msg_{idx}"] = ("success", f"✅ Added **{r['song']}** to **{chosen}**!")
+                    st.session_state[f"add_msg_{idx}"] = ("success",f"✅ Added **{r['song']}** to **{chosen}**!")
                 elif reason == "already_exists":
-                    st.session_state[f"add_msg_{idx}"] = ("warning", "⚠️ Already in that playlist.")
+                    st.session_state[f"add_msg_{idx}"] = ("warning","⚠️ Already in that playlist.")
                 else:
-                    st.session_state[f"add_msg_{idx}"] = ("error", f"❌ Save failed ({reason}). Check file permissions.")
-
-        msg_key = f"add_msg_{idx}"
-        if msg_key in st.session_state:
-            kind, msg = st.session_state[msg_key]
-            if kind == "success":   st.success(msg)
-            elif kind == "warning": st.warning(msg)
-            else:                   st.error(msg)
+                    st.session_state[f"add_msg_{idx}"] = ("error","❌ Save failed.")
+        if f"add_msg_{idx}" in st.session_state:
+            kind, msg = st.session_state[f"add_msg_{idx}"]
+            if kind=="success": st.success(msg)
+            elif kind=="warning": st.warning(msg)
+            else: st.error(msg)
     else:
         st.caption("📋 No playlists yet — create one in the Playlists tab first.")
 
-    # ── RATE THIS SONG ───────────────────────────────────────────────────
-    safe  = re.sub(r"[^a-zA-Z0-9]", "_", r["song"])[:40]
+    safe  = re.sub(r"[^a-zA-Z0-9]","_",r["song"])[:40]
     s_key = f"rated_{username}_{safe}"
-
     if s_key not in st.session_state:
         existing_fb = get_song_feedback(username, r["song"], r["artist"])
         if existing_fb:
-            st.session_state[s_key] = {
-                "rating":  existing_fb["rating"],
-                "comment": existing_fb.get("comment",""),
-            }
-
+            st.session_state[s_key] = {"rating":existing_fb["rating"],
+                                        "comment":existing_fb.get("comment","")}
     with st.expander(f"⭐ Rate · {r['song']}", expanded=False):
         if st.session_state.get(s_key):
             fb    = st.session_state[s_key]
-            stars = "⭐" * fb["rating"] + "☆" * (5 - fb["rating"])
+            stars = "⭐"*fb["rating"]+"☆"*(5-fb["rating"])
             st.success(f"Rating saved! {stars}")
             if fb.get("comment"):
                 st.caption(f"Your comment: *{fb['comment']}*")
@@ -590,19 +605,19 @@ def song_card(r, username, idx):
                 del st.session_state[s_key]
                 st.rerun()
         else:
-            rating  = st.slider("Your rating", 1, 5, 3, key=f"rating_{idx}", format="%d ⭐")
-            comment = st.text_input("Comment (optional)", placeholder="e.g. Love this track!", key=f"comment_{idx}")
-            if st.button("💾 Save Rating", key=f"save_{idx}"):
-                ok = save_feedback(username, r["song"], r["artist"], rating, comment)
+            rating  = st.slider("Your rating",1,5,3,key=f"rating_{idx}",format="%d ⭐")
+            comment = st.text_input("Comment (optional)",placeholder="e.g. Love this track!",key=f"comment_{idx}")
+            if st.button("💾 Save Rating",key=f"save_{idx}"):
+                ok = save_feedback(username,r["song"],r["artist"],rating,comment)
                 if ok:
-                    st.session_state[s_key] = {"rating": rating, "comment": comment}
+                    st.session_state[s_key] = {"rating":rating,"comment":comment}
                     st.rerun()
                 else:
-                    st.error("❌ Could not save rating. Check file permissions for feedback.json")
+                    st.error("❌ Could not save rating.")
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# LOGIN
+# LOGIN PAGE
 # ══════════════════════════════════════════════════════════════════════════
 def login_page():
     st.markdown("""
@@ -615,9 +630,9 @@ def login_page():
         t1, t2 = st.tabs(["🔑 Login","🆕 Sign Up"])
         with t1:
             st.markdown("<br>", unsafe_allow_html=True)
-            u  = st.text_input("Username", key="li_u")
-            p  = st.text_input("Password", type="password", key="li_p")
-            if st.button("Login →", width="stretch"):
+            u = st.text_input("Username", key="li_u")
+            p = st.text_input("Password", type="password", key="li_p")
+            if st.button("Login →", use_container_width=True):
                 if verify_user(u, p):
                     st.session_state.update({"logged_in":True,"username":u})
                     st.rerun()
@@ -627,7 +642,7 @@ def login_page():
             st.markdown("<br>", unsafe_allow_html=True)
             nu  = st.text_input("Choose Username", key="su_u")
             np_ = st.text_input("Choose Password", type="password", key="su_p")
-            if st.button("Create Account →", width="stretch"):
+            if st.button("Create Account →", use_container_width=True):
                 ok, msg = save_user(nu, np_)
                 (st.success if ok else st.error)(msg)
 
@@ -637,6 +652,7 @@ def login_page():
 # ══════════════════════════════════════════════════════════════════════════
 def render_sidebar(username):
     color = get_user_color(username)
+    model_status = "✅ ML Model" if ml_model is not None else "⚠️ VADER only"
     st.sidebar.markdown(f"""
     <div style='text-align:center;padding:16px 0 20px'>
         <div style='width:60px;height:60px;border-radius:50%;background:{color};margin:0 auto 10px;
@@ -653,11 +669,12 @@ def render_sidebar(username):
     <div class='metric-card'><div class='val'>{num_pl}</div><div class='lbl'>Playlists</div></div>
     """, unsafe_allow_html=True)
     st.sidebar.markdown(f"**Favourite Mood:** {EMOTION_MAP.get(top_e,{}).get('emoji','🎵')} {top_e}")
+    st.sidebar.markdown(f"**Detection:** {model_status}")
     st.sidebar.markdown("---")
     if st.sidebar.button("🚪 Logout"):
         st.session_state["logged_in"] = False
         st.rerun()
-    st.sidebar.caption("MoodTunes v4.2 · Improved Happy Detection")
+    st.sidebar.caption("MoodTunes v5.0 · ML Model + OpenCV")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -668,7 +685,7 @@ def main_app(username):
     st.markdown("""
     <div style='margin-bottom:24px'>
         <span style='font-family:Orbitron,monospace;font-size:1.9rem;color:#0077aa'>🎧 MOODTUNES</span>
-        <span style='color:#555577;font-size:.9rem;margin-left:14px'>AI Music Recommender · Personalised · Explainable</span>
+        <span style='color:#555577;font-size:.9rem;margin-left:14px'>AI Music Recommender · ML Powered · Personalised</span>
     </div>""", unsafe_allow_html=True)
 
     tabs = st.tabs(["🎵 Discover","📋 Playlists","📊 Analytics","🔍 Explore","⚙️ Settings"])
@@ -706,7 +723,7 @@ def main_app(username):
             with c2:
                 st.markdown("📷 Capture face (optional)")
                 camera_image = st.camera_input("Webcam capture", key="cam1")
-            if st.button("🔮 Recommend Songs", width="stretch"):
+            if st.button("🔮 Recommend Songs", use_container_width=True):
                 with st.spinner("Analysing mood…"):
                     recs, error = get_recommendations(
                         user_input, camera_image,
@@ -720,7 +737,8 @@ def main_app(username):
                     st.session_state["current_recs"] = recs
                     if user_input.strip() and not prefer_camera:
                         sc, fl, _, em = detect_user_mood_from_text(user_input)
-                        st.session_state["current_mood"] = (em, sc, fl, "Text (VADER)")
+                        method_label = "ML Model" if ml_model is not None else "VADER"
+                        st.session_state["current_mood"] = (em, sc, fl, method_label)
                         log_history(username, fl, em, top_n, "text")
                     elif camera_image:
                         pil = Image.open(io.BytesIO(camera_image.getvalue()))
@@ -733,7 +751,7 @@ def main_app(username):
         # ── FACE CAMERA ──────────────────────────────────────────────────
         elif "📷" in input_method:
             camera_image = st.camera_input("📷 Capture your face", key="cam2")
-            if st.button("🔮 Analyse My Face", width="stretch"):
+            if st.button("🔮 Analyse My Face", use_container_width=True):
                 if camera_image:
                     with st.spinner("Detecting emotion…"):
                         pil = Image.open(io.BytesIO(camera_image.getvalue()))
@@ -750,14 +768,14 @@ def main_app(username):
                         if err:
                             st.error(err)
                     else:
-                        st.error("Could not detect a face. Please try better lighting or move closer to the camera.")
+                        st.error("Could not detect a face. Please try better lighting or move closer.")
                 else:
                     st.warning("Please capture a photo first.")
 
         # ── WEATHER ──────────────────────────────────────────────────────
         elif "🌦️" in input_method:
             city = st.text_input("🏙️ Enter your city", placeholder="Mumbai, Delhi, London…")
-            if st.button("🔮 Mood from Weather", width="stretch"):
+            if st.button("🔮 Mood from Weather", use_container_width=True):
                 if city.strip():
                     with st.spinner(f"Fetching weather for {city}…"):
                         desc, temp = get_weather(city)
@@ -781,8 +799,7 @@ def main_app(username):
         # ── UPLOAD IMAGE ─────────────────────────────────────────────────
         elif "📂" in input_method:
             uploaded_file = st.file_uploader(
-                "Drop image here",
-                type=["jpg","jpeg","png","webp"],
+                "Drop image here", type=["jpg","jpeg","png","webp"],
                 label_visibility="collapsed",
             )
             if uploaded_file:
@@ -796,7 +813,7 @@ def main_app(username):
                         f"**Size:** {uploaded_file.size/1024:.1f} KB\n\n"
                         f"**Dim:** {pil_image.width}×{pil_image.height} px"
                     )
-                if st.button("🔮 Detect Emotion from Image", width="stretch"):
+                if st.button("🔮 Detect Emotion from Image", use_container_width=True):
                     with st.spinner("Analysing your expression…"):
                         dom = detect_face_emotion_from_image(pil_image)
                     if dom:
@@ -811,7 +828,7 @@ def main_app(username):
                         if err:
                             st.error(err)
                     else:
-                        st.error("Could not detect a face. Try a clearer, well-lit photo facing the camera directly.")
+                        st.error("Could not detect a face. Try a clearer, well-lit photo.")
             else:
                 st.markdown("""
                 <div style='border:2px dashed #b0c4de;border-radius:14px;padding:48px 24px;
@@ -832,7 +849,7 @@ def main_app(username):
             for i, r in enumerate(recs):
                 song_card(r, username, i)
         st.markdown("---")
-        st.caption("💡 Tip: Face the camera directly with good lighting for best emotion detection.")
+        st.caption("💡 Tip: Type how you feel for ML-powered detection, or use face camera!")
 
     # ── TAB 2: PLAYLISTS ─────────────────────────────────────────────────
     with tabs[1]:
@@ -846,7 +863,7 @@ def main_app(username):
                         st.success(f"✅ Playlist '{new_pl}' created!")
                         st.rerun()
                     else:
-                        st.error("❌ Could not save. Check file permissions.")
+                        st.error("❌ Could not save.")
                 else:
                     st.warning("Please enter a name.")
 
@@ -876,18 +893,17 @@ def main_app(username):
                                 </div>""", unsafe_allow_html=True)
                             with c2:
                                 safe_song = re.sub(r"[^a-zA-Z0-9]","_",s["song"])[:20]
-                                if st.button("🗑️", key=f"rm_{pl_name}_{safe_song}", help=f"Remove {s['song']}"):
+                                if st.button("🗑️",key=f"rm_{pl_name}_{safe_song}",help=f"Remove {s['song']}"):
                                     data = _load_json(PLAYLIST_FILE, {})
                                     if username in data and pl_name in data[username]:
                                         data[username][pl_name] = [
-                                            x for x in data[username][pl_name]
-                                            if x["song"] != s["song"]
+                                            x for x in data[username][pl_name] if x["song"]!=s["song"]
                                         ]
                                         _save_json(PLAYLIST_FILE, data)
                                         st.rerun()
                     else:
                         st.write("Empty playlist. Add songs from Discover!")
-                    if st.button(f"🗑️ Delete '{pl_name}'", key=f"del_{pl_name}"):
+                    if st.button(f"🗑️ Delete '{pl_name}'",key=f"del_{pl_name}"):
                         delete_playlist(username, pl_name)
                         st.rerun()
 
@@ -922,8 +938,8 @@ def main_app(username):
                 fig = px.bar(ec_df, x="Emotion", y="Count", color="Emotion",
                              color_discrete_map={k:v["color"] for k,v in EMOTION_MAP.items()},
                              template="plotly_white")
-                fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
-                st.plotly_chart(fig, width="stretch")
+                fig.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
             except ImportError:
                 st.bar_chart(ec_df.set_index("Emotion"))
 
@@ -933,7 +949,7 @@ def main_app(username):
                 fig_m = px.pie(md_df, values="Count", names="Method", template="plotly_white",
                                color_discrete_sequence=["#0077aa","#228855","#FFD700","#FF69B4"])
                 fig_m.update_layout(paper_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig_m, width="stretch")
+                st.plotly_chart(fig_m, use_container_width=True)
             except Exception:
                 st.bar_chart(md_df.set_index("Method"))
 
@@ -949,38 +965,33 @@ def main_app(username):
 
         st.markdown("---")
         st.markdown("#### ⭐ Your Song Ratings")
-        feedback = get_feedback(username)
         if not feedback:
-            st.info("You haven't rated any songs yet. Rate songs from the Discover tab!")
+            st.info("You haven't rated any songs yet.")
         else:
             avg_r = sum(f["rating"] for f in feedback) / len(feedback)
             top_r = max(feedback, key=lambda x: x["rating"])
-            r1, r2, r3 = st.columns(3)
-            r1.markdown(f"<div class='metric-card'><div class='val'>{len(feedback)}</div><div class='lbl'>Songs Rated</div></div>", unsafe_allow_html=True)
-            r2.markdown(f"<div class='metric-card'><div class='val'>{avg_r:.1f} ⭐</div><div class='lbl'>Avg Rating</div></div>", unsafe_allow_html=True)
-            r3.markdown(f"<div class='metric-card'><div class='val'>⭐{top_r['rating']}</div><div class='lbl'>Highest Rated</div></div>", unsafe_allow_html=True)
+            r1,r2,r3 = st.columns(3)
+            r1.markdown(f"<div class='metric-card'><div class='val'>{len(feedback)}</div><div class='lbl'>Songs Rated</div></div>",unsafe_allow_html=True)
+            r2.markdown(f"<div class='metric-card'><div class='val'>{avg_r:.1f} ⭐</div><div class='lbl'>Avg Rating</div></div>",unsafe_allow_html=True)
+            r3.markdown(f"<div class='metric-card'><div class='val'>⭐{top_r['rating']}</div><div class='lbl'>Highest Rated</div></div>",unsafe_allow_html=True)
             try:
                 import plotly.express as px
                 rc  = Counter(f["rating"] for f in feedback)
-                rd  = pd.DataFrame([(f"{k}⭐",v) for k,v in sorted(rc.items())], columns=["Stars","Count"])
-                fig_r = px.bar(rd, x="Stars", y="Count", template="plotly_white",
-                               color_discrete_sequence=["#FFD700"], title="Your Rating Distribution")
-                fig_r.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
-                st.plotly_chart(fig_r, width="stretch")
+                rd  = pd.DataFrame([(f"{k}⭐",v) for k,v in sorted(rc.items())],columns=["Stars","Count"])
+                fig_r = px.bar(rd,x="Stars",y="Count",template="plotly_white",
+                               color_discrete_sequence=["#FFD700"],title="Your Rating Distribution")
+                fig_r.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",showlegend=False)
+                st.plotly_chart(fig_r,use_container_width=True)
             except Exception:
                 pass
-
             st.markdown("##### 📝 All Your Rated Songs")
             for fb in reversed(feedback):
-                rating   = int(fb.get("rating",0))
-                stars    = "⭐" * rating + "☆" * (5-rating)
-                ts       = fb.get("timestamp","")[:16].replace("T"," ")
-                comment  = fb.get("comment","").strip()
-                cmt_html = (
-                    f"<div class='rating-comment'>💬 {comment}</div>"
-                    if comment else
-                    "<div class='rating-comment' style='color:#aaa'>No comment</div>"
-                )
+                rating  = int(fb.get("rating",0))
+                stars   = "⭐"*rating+"☆"*(5-rating)
+                ts      = fb.get("timestamp","")[:16].replace("T"," ")
+                comment = fb.get("comment","").strip()
+                cmt_html = f"<div class='rating-comment'>💬 {comment}</div>" if comment else \
+                           "<div class='rating-comment' style='color:#aaa'>No comment</div>"
                 st.markdown(f"""
                 <div class='rating-card'>
                     <div class='rating-song'>🎵 {fb['song']}</div>
@@ -992,7 +1003,7 @@ def main_app(username):
             with st.expander("📊 Table View"):
                 fb_df = pd.DataFrame(feedback)[["song","artist","rating","comment","timestamp"]]
                 fb_df["timestamp"] = fb_df["timestamp"].str[:16].str.replace("T"," ")
-                st.dataframe(fb_df.sort_values("timestamp", ascending=False), width="stretch", hide_index=True)
+                st.dataframe(fb_df.sort_values("timestamp",ascending=False),use_container_width=True,hide_index=True)
 
     # ── TAB 4: EXPLORE ───────────────────────────────────────────────────
     with tabs[3]:
@@ -1004,10 +1015,10 @@ def main_app(username):
             ec.columns = ["Emotion","Count"]
             try:
                 import plotly.express as px
-                fig2 = px.pie(ec, values="Count", names="Emotion", template="plotly_white",
+                fig2 = px.pie(ec,values="Count",names="Emotion",template="plotly_white",
                               color_discrete_sequence=["#FFD700","#FF69B4","#87CEEB","#6495ED","#8B5CF6"])
                 fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig2, width="stretch")
+                st.plotly_chart(fig2,use_container_width=True)
             except ImportError:
                 st.bar_chart(ec.set_index("Emotion"))
         with c2:
@@ -1037,41 +1048,40 @@ def main_app(username):
         gc.columns = ["Genre","Count"]
         try:
             import plotly.express as px
-            fig3 = px.bar(gc, x="Genre", y="Count", template="plotly_white",
-                          color="Count", color_continuous_scale=["#b0c4de","#0077aa"])
-            fig3.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
-            st.plotly_chart(fig3, width="stretch")
+            fig3 = px.bar(gc,x="Genre",y="Count",template="plotly_white",
+                          color="Count",color_continuous_scale=["#b0c4de","#0077aa"])
+            fig3.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",showlegend=False)
+            st.plotly_chart(fig3,use_container_width=True)
         except ImportError:
             st.bar_chart(gc.set_index("Genre"))
         st.markdown("#### 📈 Sentiment Distribution")
         try:
             import plotly.express as px
-            fig4 = px.histogram(df, x="sentiment_score", nbins=50, template="plotly_white",
+            fig4 = px.histogram(df,x="sentiment_score",nbins=50,template="plotly_white",
                                 color_discrete_sequence=["#0077aa"])
-            fig4.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig4, width="stretch")
+            fig4.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig4,use_container_width=True)
         except ImportError:
             st.bar_chart(df["sentiment_score"].value_counts())
 
     # ── TAB 5: SETTINGS ──────────────────────────────────────────────────
     with tabs[4]:
         st.subheader("Settings & About")
-        with st.expander("🔧 Debug: File Paths & Data Check"):
+        with st.expander("🔧 Debug Info"):
             st.code(f"""BASE_DIR      = {BASE_DIR}
-PLAYLIST_FILE = {PLAYLIST_FILE}   exists={os.path.exists(PLAYLIST_FILE)}
-FEEDBACK_FILE = {FEEDBACK_FILE}   exists={os.path.exists(FEEDBACK_FILE)}
-HISTORY_FILE  = {HISTORY_FILE}    exists={os.path.exists(HISTORY_FILE)}
-playlist_size = {os.path.getsize(PLAYLIST_FILE) if os.path.exists(PLAYLIST_FILE) else 'N/A'} bytes
-feedback_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_FILE) else 'N/A'} bytes""")
+ML Model      = {'Loaded ✅' if ml_model is not None else 'Not found ❌'}
+TFIDF Model   = {'Loaded ✅' if ml_tfidf is not None else 'Not found ❌'}
+PLAYLIST_FILE = exists={os.path.exists(PLAYLIST_FILE)}
+FEEDBACK_FILE = exists={os.path.exists(FEEDBACK_FILE)}
+HISTORY_FILE  = exists={os.path.exists(HISTORY_FILE)}""")
             if st.button("🔄 Show raw feedback.json"):
                 fb = get_feedback(username)
                 st.write(f"Total ratings: {len(fb)}")
-                if fb:
-                    st.json(fb[-5:])
+                if fb: st.json(fb[-5:])
             if st.button("🔄 Show raw playlists.json"):
                 pl = get_user_playlists(username)
                 st.write(f"Playlists: {list(pl.keys())}")
-                st.json({k: len(v) for k,v in pl.items()})
+                st.json({k:len(v) for k,v in pl.items()})
 
         st.markdown("#### 📥 Export Your Data")
         c1, c2 = st.columns(2)
@@ -1080,7 +1090,7 @@ feedback_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_FILE)
                 hist = get_history(username)
                 if hist:
                     st.download_button("⬇ Download History CSV",
-                        pd.DataFrame(hist).to_csv(index=False), "mood_history.csv","text/csv")
+                        pd.DataFrame(hist).to_csv(index=False),"mood_history.csv","text/csv")
                 else:
                     st.info("No history yet.")
         with c2:
@@ -1089,7 +1099,7 @@ feedback_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_FILE)
                 rows = [{"playlist":name,**s} for name,songs in pl.items() for s in songs]
                 if rows:
                     st.download_button("⬇ Download Playlists CSV",
-                        pd.DataFrame(rows).to_csv(index=False), "playlists.csv","text/csv")
+                        pd.DataFrame(rows).to_csv(index=False),"playlists.csv","text/csv")
                 else:
                     st.info("No playlists yet.")
 
@@ -1112,18 +1122,23 @@ feedback_size = {os.path.getsize(FEEDBACK_FILE) if os.path.exists(FEEDBACK_FILE)
                 st.success("Ratings cleared.")
 
         st.markdown("---")
-        st.markdown("""
-#### ℹ️ About MoodTunes v4.2 — Improved Happy Detection
+        st.markdown(f"""
+#### ℹ️ About MoodTunes v5.0
 
-**What changed in v4.2:**
-- ✅ Smile cascade tuned: `scaleFactor=1.5`, `minNeighbors=12`, `minSize=(20,10)` — happy faces now detected correctly
-- ✅ Removed "Face detection uses OpenCV" info banner — clean UI
-- ✅ No TensorFlow / DeepFace — zero dependency conflicts
-- ✅ All deprecation warnings fixed
+**What's New in v5.0:**
+- ✅ ML Model (emotion_model.pkl) integrated for text mood detection
+- ✅ Detects: Happy, Sad, Calm, Romantic, Dark from typed text
+- ✅ Face detection: Happy / Sad / Neutral via OpenCV
+- ✅ Weather-based mood via Open-Meteo API
+- ✅ Image upload emotion detection
+- ✅ No TensorFlow / DeepFace — Python 3.14 compatible
+- ✅ requirements.txt unchanged
 
-**Stack:** Python · Streamlit · VADER · TextBlob · OpenCV · Scikit-learn · Plotly · Open-Meteo
+**ML Model Status:** {'✅ Loaded — using ML model for text detection' if ml_model is not None else '⚠️ Not found — using VADER fallback'}
+
+**Stack:** Python · Streamlit · ML Model (joblib) · VADER · TextBlob · OpenCV · Scikit-learn · Plotly · Open-Meteo
         """)
-        st.caption("MoodTunes v4.2 · Improved Happy Detection · No TensorFlow")
+        st.caption("MoodTunes v5.0 · ML Powered · No TensorFlow · Python 3.14 compatible")
 
 
 # ══════════════════════════════════════════════════════════════════════════
