@@ -377,78 +377,119 @@ def map_face_emotion_to_label(face_emotion):
 
 def detect_face_emotion_from_image(pil_image):
     """
-    OpenCV Haar Cascade face emotion detection.
-    Detects: happy, sad, neutral, calm
+    Smart face emotion detection v5.2
+    Strategy:
+    1. Try OpenCV Haar Cascade face detection
+    2. If face found → smile/sad/neutral via cascade
+    3. If face NOT found (partial/angled photo) → brightness analysis
+       - Teeth (bright pixels) in mouth area → happy
+       - High variance + dark → sad
+       - Otherwise → neutral
     """
     try:
         import cv2
 
+        # Resize large images for better detection
+        max_dim = 800
+        w, h = pil_image.size
+        if max(w, h) > max_dim:
+            scale = max_dim / max(w, h)
+            pil_image = pil_image.resize((int(w*scale), int(h*scale)))
+            w, h = pil_image.size
+
         img  = np.array(pil_image.convert("RGB"))
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
-        # ── Face detection ────────────────────────────────────────────
+        # CLAHE equalization for better detection
+        clahe     = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8,8))
+        gray_eq   = clahe.apply(gray)
+
         face_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
-        faces = face_cascade.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=4,
-            minSize=(60, 60), flags=cv2.CASCADE_SCALE_IMAGE,
-        )
-        if len(faces) == 0:
-            faces = face_cascade.detectMultiScale(
-                gray, scaleFactor=1.05, minNeighbors=2, minSize=(40, 40),
+
+        # Try multiple scales to find face
+        faces = []
+        for sf in [1.05, 1.1, 1.15]:
+            for mn in [2, 3, 4]:
+                detected = face_cascade.detectMultiScale(
+                    gray_eq, scaleFactor=sf, minNeighbors=mn, minSize=(50, 50)
+                )
+                if len(detected) > 0:
+                    faces = detected
+                    break
+            if len(faces) > 0:
+                break
+
+        # ── PATH A: Face found → cascade-based detection ──────────────
+        if len(faces) > 0:
+            x, y, fw, fh = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
+            face_roi = gray_eq[y:y+fh, x:x+fw]
+
+            smile_cascade = cv2.CascadeClassifier(
+                cv2.data.haarcascades + "haarcascade_smile.xml"
             )
-        if len(faces) == 0:
-            return None
+            lower_face     = face_roi[fh//2:, :]
+            smiles         = smile_cascade.detectMultiScale(
+                lower_face, scaleFactor=1.5, minNeighbors=10, minSize=(15, 8),
+            )
+            smile_detected = len(smiles) > 0
 
-        x, y, w, h = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
-        face_roi    = gray[y:y+h, x:x+w]
+            eye_cascade    = cv2.CascadeClassifier(
+                cv2.data.haarcascades + "haarcascade_eye.xml"
+            )
+            upper_face     = face_roi[:fh//2, :]
+            eyes           = eye_cascade.detectMultiScale(upper_face, scaleFactor=1.1, minNeighbors=5)
+            both_eyes_open = len(eyes) >= 2
 
-        # ── Smile detection ───────────────────────────────────────────
-        smile_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_smile.xml"
-        )
-        lower_face     = face_roi[h//2:, :]
-        smiles         = smile_cascade.detectMultiScale(
-            lower_face, scaleFactor=1.5, minNeighbors=12, minSize=(20, 10),
-        )
-        smile_detected = len(smiles) > 0
+            face_brightness  = float(np.mean(face_roi))
+            face_variance    = float(np.var(face_roi))
+            mouth_region     = face_roi[int(fh*0.65):int(fh*0.85), int(fw*0.2):int(fw*0.8)]
+            mouth_brightness = float(np.mean(mouth_region)) if mouth_region.size > 0 else 128
 
-        # ── Eye detection ─────────────────────────────────────────────
-        eye_cascade    = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_eye.xml"
-        )
-        upper_face     = face_roi[:h//2, :]
-        eyes           = eye_cascade.detectMultiScale(upper_face, scaleFactor=1.1, minNeighbors=5)
-        both_eyes_open = len(eyes) >= 2
+            if smile_detected:
+                return "happy"
 
-        # ── Face metrics ──────────────────────────────────────────────
-        face_brightness  = float(np.mean(face_roi))
-        face_variance    = float(np.var(face_roi))
-        mouth_region     = face_roi[int(h*0.65):int(h*0.85), int(w*0.2):int(w*0.8)]
-        mouth_brightness = float(np.mean(mouth_region)) if mouth_region.size > 0 else 128
+            sad_score = 0
+            if face_variance   < 1800: sad_score += 1
+            if not both_eyes_open:     sad_score += 1
+            if mouth_brightness < 100: sad_score += 1
+            if face_brightness  < 100: sad_score += 1
 
-        # ── Classify ──────────────────────────────────────────────────
-        if smile_detected:
-            return "happy"
+            if sad_score >= 2:
+                return "sad"
+            elif both_eyes_open and face_brightness > 120:
+                return "neutral"
+            else:
+                return "calm"
 
-        # Sad score system
-        sad_score = 0
-        if face_variance   < 1800: sad_score += 1
-        if not both_eyes_open:     sad_score += 1
-        if mouth_brightness < 100: sad_score += 1
-        if face_brightness  < 100: sad_score += 1
+        # ── PATH B: No face found → whole-image brightness analysis ───
+        # Teeth detection: bright horizontal pixels in lower-center region
+        mouth_y1 = int(h * 0.35)
+        mouth_y2 = int(h * 0.70)
+        mouth_x1 = int(w * 0.25)
+        mouth_x2 = int(w * 0.75)
+        mouth_area = gray[mouth_y1:mouth_y2, mouth_x1:mouth_x2]
 
-        if sad_score >= 2:
-            return "sad"
-        elif both_eyes_open and face_brightness > 120:
+        if mouth_area.size == 0:
             return "neutral"
+
+        # Bright pixels = teeth = smile
+        bright_ratio  = float(np.sum(mouth_area > 190)) / mouth_area.size
+        overall_var   = float(np.var(gray))
+        overall_mean  = float(np.mean(gray))
+
+        if bright_ratio > 0.08:
+            return "happy"
+        elif overall_mean < 90 or overall_var < 500:
+            return "sad"
         else:
-            return "calm"
+            return "neutral"
 
     except Exception as e:
         st.error(f"Face detection error: {e}")
         return None
+
 
 
 # ══════════════════════════════════════════════════════════════════════════
