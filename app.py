@@ -341,8 +341,9 @@ def detect_user_mood_from_text(text):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# FACE EMOTION DETECTION — OpenCV v5.3 FINAL
-# Key fix: minNeighbors=10 prevents false smile on neutral/sad faces
+# FACE EMOTION DETECTION — OpenCV v5.4 FINAL
+# Fix: minNeighbors=22, scaleFactor=1.7, minSize=(35,15)
+# Prevents false Happy on Neutral/Sad faces
 # ══════════════════════════════════════════════════════════════════════════
 def map_face_emotion_to_label(face_emotion):
     e = str(face_emotion).lower()
@@ -392,16 +393,19 @@ def detect_face_emotion_from_image(pil_image):
             x, y, fw, fh = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
             face_roi = gray_eq[y:y+fh, x:x+fw]
 
-            # Smile detection — minNeighbors=10 is key (8 gives false positives)
+            # ── SMILE DETECTION v5.4 FIX ──────────────────────────────
+            # minNeighbors=22 (was 10) — strict threshold, no false positives
+            # scaleFactor=1.7 (was 1.5) — fewer passes, less false detection
+            # minSize=(35,15) (was 20,10) — ignores small/fake smile regions
             smile_cascade = cv2.CascadeClassifier(
                 cv2.data.haarcascades + "haarcascade_smile.xml"
             )
-            lower_face     = face_roi[fh//2:, :]
-            smiles         = smile_cascade.detectMultiScale(
+            lower_face = face_roi[fh//2:, :]
+            smiles     = smile_cascade.detectMultiScale(
                 lower_face,
-                scaleFactor=1.5,
-                minNeighbors=10,   # ← CRITICAL: 8 gives false positives on sad/neutral
-                minSize=(20, 10),
+                scaleFactor=1.7,    # ← FIX: was 1.5
+                minNeighbors=22,    # ← FIX: was 10 (key change)
+                minSize=(35, 15),   # ← FIX: was (20, 10)
             )
             smile_detected = len(smiles) > 0
 
@@ -436,7 +440,6 @@ def detect_face_emotion_from_image(pil_image):
                 return "calm"
 
         # ── PATH B: No face found → brightness analysis ───────────────
-        # For partial/landscape photos
         mouth_y1   = int(h * 0.35)
         mouth_y2   = int(h * 0.70)
         mouth_x1   = int(w * 0.25)
@@ -447,11 +450,12 @@ def detect_face_emotion_from_image(pil_image):
             return "neutral"
 
         # Teeth = bright pixels → happy
+        # bright_ratio threshold = 0.20 (stricter than before)
         bright_ratio = float(np.sum(mouth_area > 200)) / mouth_area.size
         overall_mean = float(np.mean(gray))
         overall_var  = float(np.var(gray))
 
-        if bright_ratio > 0.15:           # teeth clearly visible
+        if bright_ratio > 0.20:           # ← FIX: was 0.15 (stricter)
             return "happy"
         elif overall_mean < 90 or overall_var < 500:
             return "sad"
@@ -736,7 +740,7 @@ def render_sidebar(username):
     if st.sidebar.button("🚪 Logout"):
         st.session_state["logged_in"] = False
         st.rerun()
-    st.sidebar.caption("MoodTunes v5.3 · Final · Keyword+VADER · OpenCV")
+    st.sidebar.caption("MoodTunes v5.4 · Final · Keyword+VADER · OpenCV Fix")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1181,11 +1185,13 @@ HISTORY_FILE  = exists={os.path.exists(HISTORY_FILE)}""")
 
         st.markdown("---")
         st.markdown("""
-#### ℹ️ About MoodTunes v5.3 — FINAL
+#### ℹ️ About MoodTunes v5.4 — FINAL
 
-**✅ v5.3 Key Fix:**
-- Smile `minNeighbors=10` (was 8) — prevents false happy on sad/neutral faces
-- Path B bright_ratio threshold = 0.15 (was 0.08) — more accurate smile detection
+**✅ v5.4 Key Fix (Neutral → was showing Happy):**
+- Smile `scaleFactor=1.7` (was 1.5) — fewer detection passes
+- Smile `minNeighbors=22` (was 10) — very strict, only real smiles pass
+- Smile `minSize=(35,15)` (was 20,10) — ignores small false regions
+- Path B `bright_ratio > 0.20` (was 0.15) — stricter teeth detection
 
 **Text Detection — Keyword + VADER:**
 - 😄 Happy: happy, joy, excited, great, awesome…
@@ -1194,14 +1200,14 @@ HISTORY_FILE  = exists={os.path.exists(HISTORY_FILE)}""")
 - 😌 Calm: calm, relaxed, chill, okay, fine…
 - 💖 Romantic: romantic, in love, crush, adore…
 
-**Face Detection — OpenCV:**
-- 😄 Happy → smile cascade (minNeighbors=10)
+**Face Detection — OpenCV v5.4:**
+- 😄 Happy → smile cascade (minNeighbors=22, strict)
 - 😢 Sad → no smile + dark/flat face metrics
 - 😌 Neutral/Calm → no smile + bright open face
 
 **Stack:** Python · Streamlit · Keyword+VADER · TextBlob · OpenCV · Scikit-learn · Plotly
         """)
-        st.caption("MoodTunes v5.3 Final · No TensorFlow · Python 3.14 ✅ · requirements.txt unchanged")
+        st.caption("MoodTunes v5.4 Final · No TensorFlow · Python 3.14 ✅ · requirements.txt unchanged")
 
 
 # ══════════════════════════════════════════════════════════════════════════
