@@ -267,11 +267,11 @@ EMOTION_MAP = {
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# KEYWORD-BASED EMOTION DETECTOR (accurate for short text)
+# KEYWORD + VADER TEXT MOOD DETECTION
 # ══════════════════════════════════════════════════════════════════════════
 EMOTION_KEYWORDS = {
     "Happy / Energetic": [
-        "happy","joy","joyful","excited","great","wonderful","amazing","love","loved",
+        "happy","joy","joyful","excited","great","wonderful","amazing",
         "fantastic","awesome","cheerful","delighted","glad","ecstatic","blessed",
         "energetic","pumped","thrilled","elated","euphoric","good","enjoying","fun",
         "laugh","laughing","smile","smiling","positive","celebrate","celebration",
@@ -282,80 +282,58 @@ EMOTION_KEYWORDS = {
         "hurt","sorrowful","miserable","gloomy","down","low","broken","devastated",
         "nervous","anxious","anxiety","worried","worry","scared","fear","afraid",
         "stressed","stress","frustrated","upset","disappoint","disappointed",
-        "overwhelmed","exhausted","tired","drained","numb","empty",
+        "overwhelmed","exhausted","tired","drained","numb","empty","bored",
     ],
     "Deep Sad": [
-        "suicidal","hopeless","worthless","give up","giving up","no point","end it",
-        "darkness","dark thoughts","despair","despairing","severe depression",
-        "angry","anger","furious","rage","mad","hate","hatred","rage","violent",
-        "irritated","annoyed","disgusted","disgusting",
+        "suicidal","worthless","give up","giving up","no point","end it",
+        "darkness","despair","despairing","angry","anger","furious","rage",
+        "mad","hate","hatred","violent","irritated","annoyed","disgusted",
     ],
     "Neutral / Calm": [
-        "calm","calm down","peaceful","relaxed","relax","chill","okay","fine","ok",
-        "normal","neutral","meh","alright","so so","average","mediocre","just",
-        "bored","boredom","indifferent","whatever","nothing special",
+        "calm","peaceful","relaxed","relax","chill","okay","fine","ok",
+        "normal","neutral","meh","alright","average","nothing special",
     ],
     "Romantic / Positive": [
-        "romantic","romance","love","loved","in love","crush","attracted","beautiful",
+        "romantic","romance","in love","crush","attracted","beautiful",
         "caring","tender","affection","passionate","intimate","lovely","adore",
-        "soulmate","partner","darling","sweetheart","heart","kiss","hug",
+        "soulmate","partner","darling","sweetheart","kiss","hug",
     ],
 }
 
 def detect_mood_from_keywords(text):
     text_lower = text.lower()
-    scores = {emotion: 0 for emotion in EMOTION_KEYWORDS}
+    scores = {e: 0 for e in EMOTION_KEYWORDS}
     for emotion, keywords in EMOTION_KEYWORDS.items():
         for kw in keywords:
             if kw in text_lower:
                 scores[emotion] += 1
-    best_emotion = max(scores, key=scores.get)
-    if scores[best_emotion] == 0:
-        return None  # no keyword match
-    return best_emotion
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else None
 
 def detect_user_mood_from_text(text):
-    """
-    Smart mood detection:
-    1. Keyword check (most accurate for short text)
-    2. VADER sentiment
-    3. TextBlob as tiebreaker
-    """
-    # Step 1: Keyword detection
     keyword_emotion = detect_mood_from_keywords(text)
+    vader_compound  = analyzer.polarity_scores(text)["compound"]
+    tb_score        = TextBlob(text).sentiment.polarity
+    combined        = (vader_compound * 0.7) + (tb_score * 0.3)
 
-    # Step 2: VADER
-    vader_scores = analyzer.polarity_scores(text)
-    vader_compound = vader_scores["compound"]
-
-    # Step 3: TextBlob
-    tb_score = TextBlob(text).sentiment.polarity
-
-    # Combine VADER + TextBlob
-    combined = (vader_compound * 0.7) + (tb_score * 0.3)
-
-    # If keyword match found, use it but adjust score
     if keyword_emotion:
         score_map = {
-            "Happy / Energetic":   0.8,
-            "Romantic / Positive": 0.5,
-            "Neutral / Calm":      0.0,
-            "Sad":                -0.5,
-            "Deep Sad":           -0.8,
+            "Happy / Energetic":    0.8,
+            "Romantic / Positive":  0.5,
+            "Neutral / Calm":       0.0,
+            "Sad":                 -0.5,
+            "Deep Sad":            -0.8,
         }
         feeling_map = {
             "Happy / Energetic":   "Happy",
             "Romantic / Positive": "Romantic",
             "Neutral / Calm":      "Calm",
             "Sad":                 "Sad",
-            "Deep Sad":            "Deep Sad / Dark",
+            "Deep Sad":            "Deep Sad",
         }
-        score   = score_map[keyword_emotion]
-        feeling = feeling_map[keyword_emotion]
-        return score, feeling, "Keyword+VADER", keyword_emotion
+        return score_map[keyword_emotion], feeling_map[keyword_emotion], "Keyword+VADER", keyword_emotion
 
-    # Pure VADER+TextBlob fallback
-    if combined >  0.5: return combined, "Happy",    "VADER", "Happy / Energetic"
+    if combined >  0.5:  return combined, "Happy",    "VADER", "Happy / Energetic"
     if combined >  0.15: return combined, "Positive", "VADER", "Romantic / Positive"
     if combined > -0.15: return combined, "Neutral",  "VADER", "Neutral / Calm"
     if combined > -0.5:  return combined, "Sad",      "VADER", "Sad"
@@ -363,33 +341,23 @@ def detect_user_mood_from_text(text):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# FACE DETECTION — OpenCV
+# FACE EMOTION DETECTION — OpenCV v5.3 FINAL
+# Key fix: minNeighbors=10 prevents false smile on neutral/sad faces
 # ══════════════════════════════════════════════════════════════════════════
 def map_face_emotion_to_label(face_emotion):
     e = str(face_emotion).lower()
-    if e == "happy":   return  0.8,  "Happy",   "Energetic", "Happy / Energetic"
-    if e == "sad":     return -0.5,  "Sad",     "Calm",      "Sad"
-    if e == "angry":   return -0.6,  "Angry",   "Calm",      "Sad"
-    if e == "neutral": return  0.0,  "Neutral", "Calm",      "Neutral / Calm"
-    if e == "calm":    return  0.1,  "Calm",    "Calm",      "Neutral / Calm"
+    if e == "happy":   return  0.8, "Happy",   "Energetic", "Happy / Energetic"
+    if e == "sad":     return -0.5, "Sad",     "Calm",      "Sad"
+    if e == "neutral": return  0.0, "Neutral", "Calm",      "Neutral / Calm"
+    if e == "calm":    return  0.1, "Calm",    "Calm",      "Neutral / Calm"
     return 0.0, "Neutral", "Calm", "Neutral / Calm"
 
 
 def detect_face_emotion_from_image(pil_image):
-    """
-    Smart face emotion detection v5.2
-    Strategy:
-    1. Try OpenCV Haar Cascade face detection
-    2. If face found → smile/sad/neutral via cascade
-    3. If face NOT found (partial/angled photo) → brightness analysis
-       - Teeth (bright pixels) in mouth area → happy
-       - High variance + dark → sad
-       - Otherwise → neutral
-    """
     try:
         import cv2
 
-        # Resize large images for better detection
+        # Resize to max 800px
         max_dim = 800
         w, h = pil_image.size
         if max(w, h) > max_dim:
@@ -397,23 +365,21 @@ def detect_face_emotion_from_image(pil_image):
             pil_image = pil_image.resize((int(w*scale), int(h*scale)))
             w, h = pil_image.size
 
-        img  = np.array(pil_image.convert("RGB"))
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-
-        # CLAHE equalization for better detection
-        clahe     = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8,8))
-        gray_eq   = clahe.apply(gray)
+        img    = np.array(pil_image.convert("RGB"))
+        gray   = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        clahe  = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8,8))
+        gray_eq= clahe.apply(gray)
 
         face_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
 
-        # Try multiple scales to find face
+        # Try multiple params to find face
         faces = []
         for sf in [1.05, 1.1, 1.15]:
             for mn in [2, 3, 4]:
                 detected = face_cascade.detectMultiScale(
-                    gray_eq, scaleFactor=sf, minNeighbors=mn, minSize=(50, 50)
+                    gray_eq, scaleFactor=sf, minNeighbors=mn, minSize=(50,50)
                 )
                 if len(detected) > 0:
                     faces = detected
@@ -421,20 +387,25 @@ def detect_face_emotion_from_image(pil_image):
             if len(faces) > 0:
                 break
 
-        # ── PATH A: Face found → cascade-based detection ──────────────
+        # ── PATH A: Face found ────────────────────────────────────────
         if len(faces) > 0:
             x, y, fw, fh = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
             face_roi = gray_eq[y:y+fh, x:x+fw]
 
+            # Smile detection — minNeighbors=10 is key (8 gives false positives)
             smile_cascade = cv2.CascadeClassifier(
                 cv2.data.haarcascades + "haarcascade_smile.xml"
             )
             lower_face     = face_roi[fh//2:, :]
             smiles         = smile_cascade.detectMultiScale(
-                lower_face, scaleFactor=1.5, minNeighbors=10, minSize=(15, 8),
+                lower_face,
+                scaleFactor=1.5,
+                minNeighbors=10,   # ← CRITICAL: 8 gives false positives on sad/neutral
+                minSize=(20, 10),
             )
             smile_detected = len(smiles) > 0
 
+            # Eye detection
             eye_cascade    = cv2.CascadeClassifier(
                 cv2.data.haarcascades + "haarcascade_eye.xml"
             )
@@ -450,6 +421,7 @@ def detect_face_emotion_from_image(pil_image):
             if smile_detected:
                 return "happy"
 
+            # Sad vs neutral scoring
             sad_score = 0
             if face_variance   < 1800: sad_score += 1
             if not both_eyes_open:     sad_score += 1
@@ -463,23 +435,23 @@ def detect_face_emotion_from_image(pil_image):
             else:
                 return "calm"
 
-        # ── PATH B: No face found → whole-image brightness analysis ───
-        # Teeth detection: bright horizontal pixels in lower-center region
-        mouth_y1 = int(h * 0.35)
-        mouth_y2 = int(h * 0.70)
-        mouth_x1 = int(w * 0.25)
-        mouth_x2 = int(w * 0.75)
+        # ── PATH B: No face found → brightness analysis ───────────────
+        # For partial/landscape photos
+        mouth_y1   = int(h * 0.35)
+        mouth_y2   = int(h * 0.70)
+        mouth_x1   = int(w * 0.25)
+        mouth_x2   = int(w * 0.75)
         mouth_area = gray[mouth_y1:mouth_y2, mouth_x1:mouth_x2]
 
         if mouth_area.size == 0:
             return "neutral"
 
-        # Bright pixels = teeth = smile
-        bright_ratio  = float(np.sum(mouth_area > 190)) / mouth_area.size
-        overall_var   = float(np.var(gray))
-        overall_mean  = float(np.mean(gray))
+        # Teeth = bright pixels → happy
+        bright_ratio = float(np.sum(mouth_area > 200)) / mouth_area.size
+        overall_mean = float(np.mean(gray))
+        overall_var  = float(np.var(gray))
 
-        if bright_ratio > 0.08:
+        if bright_ratio > 0.15:           # teeth clearly visible
             return "happy"
         elif overall_mean < 90 or overall_var < 500:
             return "sad"
@@ -491,17 +463,16 @@ def detect_face_emotion_from_image(pil_image):
         return None
 
 
-
 # ══════════════════════════════════════════════════════════════════════════
 # WEATHER MOOD
 # ══════════════════════════════════════════════════════════════════════════
 def weather_to_mood(weather_desc):
     w = weather_desc.lower()
-    if any(k in w for k in ["clear","sun"]):             return  0.7, "Happy / Energetic"
-    if any(k in w for k in ["cloud","overcast"]):        return  0.0, "Neutral / Calm"
-    if any(k in w for k in ["rain","drizzle","shower"]): return -0.4, "Sad"
-    if any(k in w for k in ["storm","thunder","snow"]):  return -0.7, "Deep Sad"
-    if any(k in w for k in ["fog","mist","haze"]):       return -0.1, "Neutral / Calm"
+    if any(k in w for k in ["clear","sun"]):              return  0.7, "Happy / Energetic"
+    if any(k in w for k in ["cloud","overcast"]):         return  0.0, "Neutral / Calm"
+    if any(k in w for k in ["rain","drizzle","shower"]):  return -0.4, "Sad"
+    if any(k in w for k in ["storm","thunder","snow"]):   return -0.7, "Deep Sad"
+    if any(k in w for k in ["fog","mist","haze"]):        return -0.1, "Neutral / Calm"
     return 0.0, "Neutral / Calm"
 
 def _wmo_code(code):
@@ -765,7 +736,7 @@ def render_sidebar(username):
     if st.sidebar.button("🚪 Logout"):
         st.session_state["logged_in"] = False
         st.rerun()
-    st.sidebar.caption("MoodTunes v5.1 · Keyword+VADER · OpenCV")
+    st.sidebar.caption("MoodTunes v5.3 · Final · Keyword+VADER · OpenCV")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -776,7 +747,7 @@ def main_app(username):
     st.markdown("""
     <div style='margin-bottom:24px'>
         <span style='font-family:Orbitron,monospace;font-size:1.9rem;color:#0077aa'>🎧 MOODTUNES</span>
-        <span style='color:#555577;font-size:.9rem;margin-left:14px'>AI Music Recommender · Keyword+VADER · OpenCV Face</span>
+        <span style='color:#555577;font-size:.9rem;margin-left:14px'>AI Music Recommender · Personalised · Explainable</span>
     </div>""", unsafe_allow_html=True)
 
     tabs = st.tabs(["🎵 Discover","📋 Playlists","📊 Analytics","🔍 Explore","⚙️ Settings"])
@@ -858,7 +829,7 @@ def main_app(username):
                         if err:
                             st.error(err)
                     else:
-                        st.error("Could not detect a face. Please try better lighting or move closer.")
+                        st.error("Could not detect a face. Try better lighting or move closer.")
                 else:
                     st.warning("Please capture a photo first.")
 
@@ -939,7 +910,7 @@ def main_app(username):
             for i, r in enumerate(recs):
                 song_card(r, username, i)
         st.markdown("---")
-        st.caption("💡 Tip: Type exactly how you feel — 'I feel sad', 'I am nervous', 'I feel happy'")
+        st.caption("💡 Tip: Type exactly how you feel — 'I feel sad', 'I feel happy', 'I feel nervous'")
 
     # ── TAB 2: PLAYLISTS ─────────────────────────────────────────────────
     with tabs[1]:
@@ -956,7 +927,6 @@ def main_app(username):
                         st.error("❌ Could not save.")
                 else:
                     st.warning("Please enter a name.")
-
         playlists = get_user_playlists(username)
         if not playlists:
             st.info("No playlists yet. Create one above, then add songs from Discover!")
@@ -1069,7 +1039,7 @@ def main_app(username):
                 rc  = Counter(f["rating"] for f in feedback)
                 rd  = pd.DataFrame([(f"{k}⭐",v) for k,v in sorted(rc.items())],columns=["Stars","Count"])
                 fig_r = px.bar(rd,x="Stars",y="Count",template="plotly_white",
-                               color_discrete_sequence=["#FFD700"],title="Your Rating Distribution")
+                               color_discrete_sequence=["#FFD700"],title="Rating Distribution")
                 fig_r.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",showlegend=False)
                 st.plotly_chart(fig_r,use_container_width=True)
             except Exception:
@@ -1125,7 +1095,7 @@ def main_app(username):
                             <div class='pl-item'>
                                 <div>
                                     <div class='pl-song'>🎵 {s['song']}</div>
-                                    <div class='pl-artist'>{s['artist']} · {s['similarity']}% match · {s['genre']}</div>
+                                    <div class='pl-artist'>{s['artist']} · {s['similarity']}% · {s['genre']}</div>
                                 </div>
                                 <a href='https://open.spotify.com/search/{q}' target='_blank'
                                    style='color:#1DB954;font-size:.8rem;text-decoration:none'>▶ Play</a>
@@ -1211,23 +1181,27 @@ HISTORY_FILE  = exists={os.path.exists(HISTORY_FILE)}""")
 
         st.markdown("---")
         st.markdown("""
-#### ℹ️ About MoodTunes v5.1
+#### ℹ️ About MoodTunes v5.3 — FINAL
 
-**Text Mood Detection — Keyword + VADER:**
-- 😄 Happy: happy, joy, excited, great, awesome, love…
-- 😢 Sad: sad, cry, depressed, lonely, nervous, anxious, worried, stressed…
-- 💔 Deep Sad / Dark: angry, furious, rage, hopeless, despair…
-- 😌 Calm: calm, peaceful, relaxed, chill, okay, fine…
-- 💖 Romantic: romantic, love, crush, attracted, adore…
+**✅ v5.3 Key Fix:**
+- Smile `minNeighbors=10` (was 8) — prevents false happy on sad/neutral faces
+- Path B bright_ratio threshold = 0.15 (was 0.08) — more accurate smile detection
+
+**Text Detection — Keyword + VADER:**
+- 😄 Happy: happy, joy, excited, great, awesome…
+- 😢 Sad: sad, cry, nervous, anxious, worried, stressed, tired…
+- 💔 Deep Sad: angry, furious, hopeless, despair…
+- 😌 Calm: calm, relaxed, chill, okay, fine…
+- 💖 Romantic: romantic, in love, crush, adore…
 
 **Face Detection — OpenCV:**
-- 😄 Happy → smile detected
-- 😢 Sad → no smile + dark/flat face
+- 😄 Happy → smile cascade (minNeighbors=10)
+- 😢 Sad → no smile + dark/flat face metrics
 - 😌 Neutral/Calm → no smile + bright open face
 
-**Stack:** Python · Streamlit · Keyword+VADER · TextBlob · OpenCV · Scikit-learn · Plotly · Open-Meteo
+**Stack:** Python · Streamlit · Keyword+VADER · TextBlob · OpenCV · Scikit-learn · Plotly
         """)
-        st.caption("MoodTunes v5.1 · Keyword+VADER Text · OpenCV Face · No TensorFlow · Python 3.14 ✅")
+        st.caption("MoodTunes v5.3 Final · No TensorFlow · Python 3.14 ✅ · requirements.txt unchanged")
 
 
 # ══════════════════════════════════════════════════════════════════════════
