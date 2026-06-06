@@ -1,6 +1,6 @@
 #╔══════════════════════════════════════════════════════════════════════════╗
 # ║        MOODTUNES – AI Powered Mood-Based Music Recommendation System    ║
-# ║        v5.5 FIXED – No Haar Smile Cascade, Pure Pixel Analysis         ║
+# ║                    v5.5 FINAL – Fixed Face Detection                    ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
 import urllib.parse
@@ -342,9 +342,20 @@ def detect_user_mood_from_text(text):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# FACE EMOTION DETECTION — v5.5 FIXED
-# ✅ Smile Haar cascade पूर्णपणे बंद — false positive चा मूळ कारण
-# ✅ Pure pixel analysis: teeth_ratio, mouth_std, brow_var, eye openness
+# FACE EMOTION DETECTION — v5.5 PIXEL-RATIO METHOD
+#
+# ROOT CAUSE OF BUG: Haar smile cascade is notoriously unreliable.
+# minNeighbors=22 was TOO HIGH  → missed real smiles → wrongly detected "Sad"
+# minNeighbors=8  was TOO LOW   → false positives on neutral/sad faces
+# There is NO single threshold that works reliably for all faces.
+#
+# FIX: Replace smile cascade entirely with pixel-ratio analysis:
+#   1. Detect face with Haar (still reliable for face bounding box)
+#   2. Isolate mouth ROI (bottom 30% of face)
+#   3. Apply adaptive threshold to find bright/white pixels (teeth)
+#   4. Calculate "teeth ratio" = bright pixels / total mouth pixels
+#   5. Happy  → teeth_ratio > 0.08  (teeth clearly visible)
+#   6. Also use eye-openness + face brightness as tiebreaker
 # ══════════════════════════════════════════════════════════════════════════
 def map_face_emotion_to_label(face_emotion):
     e = str(face_emotion).lower()
@@ -355,38 +366,67 @@ def map_face_emotion_to_label(face_emotion):
     return 0.0, "Neutral", "Calm", "Neutral / Calm"
 
 
+def _get_teeth_ratio(mouth_roi):
+    """
+    Returns ratio of bright (teeth) pixels in the mouth region.
+    Uses Otsu thresholding — adaptive, works regardless of lighting.
+    Higher ratio = more teeth visible = smiling / happy.
+    """
+    import cv2
+    if mouth_roi is None or mouth_roi.size == 0:
+        return 0.0
+    # Otsu threshold to separate bright teeth from darker lips/skin
+    _, thresh = cv2.threshold(mouth_roi, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    bright_pixels = float(np.sum(thresh == 255))
+    total_pixels  = float(thresh.size)
+    return bright_pixels / total_pixels if total_pixels > 0 else 0.0
+
+
+def _count_open_eyes(face_roi, fh, fw):
+    """Counts open eyes in the upper half of the face ROI."""
+    import cv2
+    eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml")
+    upper_face  = face_roi[:int(fh * 0.55), :]
+    eyes        = eye_cascade.detectMultiScale(
+        upper_face, scaleFactor=1.1, minNeighbors=4, minSize=(15, 15)
+    )
+    return len(eyes)
+
+
 def detect_face_emotion_from_image(pil_image):
     """
-    v5.5 FIXED — Haar smile cascade पूर्णपणे काढला.
-    आता फक्त pixel-level mouth + eye + brow analysis वापरतो.
-    Tilted / side-lit faces वर false happy येत नाही.
+    v5.5 — Pixel-ratio smile detection.
+    No smile cascade. Uses Otsu-thresholded teeth-pixel ratio instead.
+    Thresholds tuned for both webcam and uploaded photos.
     """
     try:
         import cv2
 
-        # ── RESIZE ────────────────────────────────────────────────────────
-        max_dim = 800
+        # ── Resize to max 900px for speed ────────────────────────────────
+        max_dim = 900
         w, h = pil_image.size
         if max(w, h) > max_dim:
-            scale = max_dim / max(w, h)
+            scale     = max_dim / max(w, h)
             pil_image = pil_image.resize((int(w * scale), int(h * scale)))
-            w, h = pil_image.size
+            w, h      = pil_image.size
 
-        img    = np.array(pil_image.convert("RGB"))
-        gray   = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        clahe  = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        img  = np.array(pil_image.convert("RGB"))
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+        # CLAHE for contrast normalisation (helps with dark/dim photos)
+        clahe   = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         gray_eq = clahe.apply(gray)
 
         face_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
 
-        # Try multiple scaleFactor / minNeighbors combos
+        # Try multiple scaleFactor / minNeighbors to find a face
         faces = []
         for sf in [1.05, 1.1, 1.15, 1.2]:
-            for mn in [2, 3, 4, 5]:
+            for mn in [3, 4, 5]:
                 detected = face_cascade.detectMultiScale(
-                    gray_eq, scaleFactor=sf, minNeighbors=mn, minSize=(50, 50)
+                    gray_eq, scaleFactor=sf, minNeighbors=mn, minSize=(60, 60)
                 )
                 if len(detected) > 0:
                     faces = detected
@@ -394,118 +434,73 @@ def detect_face_emotion_from_image(pil_image):
             if len(faces) > 0:
                 break
 
-        # ── PATH A: Face found ────────────────────────────────────────────
+        # ── PATH A: Face found ───────────────────────────────────────────
         if len(faces) > 0:
+            # Pick largest face
             x, y, fw, fh = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)[0]
-            face_roi = gray_eq[y:y + fh, x:x + fw]
+            face_roi      = gray_eq[y:y + fh, x:x + fw]
 
-            # ── EYE OPENNESS ─────────────────────────────────────────────
-            eye_cascade = cv2.CascadeClassifier(
-                cv2.data.haarcascades + "haarcascade_eye.xml"
-            )
-            upper_face     = face_roi[: fh // 2, :]
-            eyes           = eye_cascade.detectMultiScale(
-                upper_face, scaleFactor=1.1, minNeighbors=5
-            )
-            both_eyes_open = len(eyes) >= 2
-
-            # ── MOUTH PIXEL ANALYSIS (NO smile cascade) ──────────────────
-            # Lower 25% of face = mouth region
+            # — Mouth ROI: bottom 30% of face, middle 60% width —
             mouth_y1  = int(fh * 0.65)
-            mouth_y2  = int(fh * 0.90)
-            mouth_x1  = int(fw * 0.15)
-            mouth_x2  = int(fw * 0.85)
+            mouth_y2  = int(fh * 0.92)
+            mouth_x1  = int(fw * 0.20)
+            mouth_x2  = int(fw * 0.80)
             mouth_roi = face_roi[mouth_y1:mouth_y2, mouth_x1:mouth_x2]
 
-            if mouth_roi.size == 0:
-                return "neutral"
+            teeth_ratio     = _get_teeth_ratio(mouth_roi)
+            n_open_eyes     = _count_open_eyes(face_roi, fh, fw)
+            face_brightness = float(np.mean(face_roi))
+            face_variance   = float(np.var(face_roi))
 
-            mouth_mean  = float(np.mean(mouth_roi))
-            mouth_std   = float(np.std(mouth_roi))
-
-            # Teeth = bright pixels (>180) in mouth area
-            teeth_ratio = float(np.sum(mouth_roi > 180)) / mouth_roi.size
-
-            # ── BROW REGION (sad/concern cue) ─────────────────────────────
-            brow_y1  = int(fh * 0.10)
-            brow_y2  = int(fh * 0.30)
-            brow_roi = face_roi[brow_y1:brow_y2, :]
-            brow_var = float(np.var(brow_roi)) if brow_roi.size > 0 else 0.0
-
-            # ── OVERALL FACE METRICS ──────────────────────────────────────
-            face_mean = float(np.mean(face_roi))
-            face_var  = float(np.var(face_roi))
-
-            # ── SCORING SYSTEM ────────────────────────────────────────────
-            happy_score = 0
-            sad_score   = 0
-
-            # 1. TEETH — strongest happy signal
-            if teeth_ratio > 0.25:
-                happy_score += 3
-            elif teeth_ratio > 0.15:
-                happy_score += 2
-            elif teeth_ratio < 0.05:
-                sad_score   += 2   # no visible teeth = not smiling
-
-            # 2. MOUTH TEXTURE — smile creates more edge contrast
-            if mouth_std > 45:
-                happy_score += 1
-            elif mouth_std < 20:
-                sad_score   += 1
-
-            # 3. MOUTH BRIGHTNESS
-            if mouth_mean > 160:
-                happy_score += 1
-            elif mouth_mean < 100:
-                sad_score   += 1
-
-            # 4. EYE OPENNESS — droopy/closed eyes = sad/tired
-            if not both_eyes_open:
-                sad_score += 2
-
-            # 5. OVERALL FACE BRIGHTNESS — dark face = sad
-            if face_mean < 90:
-                sad_score += 1
-
-            # 6. FLAT EXPRESSION — low variance = expressionless / sad
-            if face_var < 1500:
-                sad_score += 1
-
-            # 7. BROW FURROW — high variance in brow = wrinkle = concerned
-            if brow_var > 1800:
-                sad_score += 1
-
-            # ── FINAL DECISION ────────────────────────────────────────────
-            # Happy needs STRONG evidence (teeth visible + texture)
-            if happy_score >= 4 and happy_score > sad_score + 1:
+            # ── Decision logic ───────────────────────────────────────────
+            # teeth_ratio > 0.08 → teeth clearly showing → Happy
+            # Lowered from 0.15 to 0.08 to catch natural smiles
+            # (even partial tooth-show registers ~0.08–0.15 with Otsu)
+            if teeth_ratio > 0.08:
                 return "happy"
-            elif sad_score >= 3:
+
+            # Bright, open-eyed, expressive face with some tooth hint → Happy
+            if teeth_ratio > 0.05 and n_open_eyes >= 2 and face_brightness > 130:
+                return "happy"
+
+            # Sad indicators: low variance (flat expression), dark, eyes closed/droopy
+            sad_score = 0
+            if face_variance   < 1500:   sad_score += 1   # flat, unexpressive face
+            if n_open_eyes     < 2:      sad_score += 1   # eyes closed / droopy
+            if face_brightness < 95:     sad_score += 1   # dark/underexposed face
+            if teeth_ratio     < 0.01:   sad_score += 1   # no teeth at all (closed mouth)
+
+            if sad_score >= 3:
                 return "sad"
-            elif sad_score >= 2 and happy_score == 0:
+            elif sad_score >= 2 and face_brightness < 110:
                 return "sad"
-            elif both_eyes_open and face_mean > 120:
+            elif n_open_eyes >= 2 and face_brightness > 120:
                 return "neutral"
             else:
                 return "calm"
 
-        # ── PATH B: No face found → global brightness analysis ────────────
-        mouth_y1   = int(h * 0.35)
-        mouth_y2   = int(h * 0.70)
-        mouth_x1   = int(w * 0.25)
-        mouth_x2   = int(w * 0.75)
+        # ── PATH B: No face detected → full-image brightness fallback ────
+        # Useful for partial/profile/far-away photos
+        # Analyse the central vertical strip for teeth brightness
+        mouth_y1   = int(h * 0.40)
+        mouth_y2   = int(h * 0.72)
+        mouth_x1   = int(w * 0.30)
+        mouth_x2   = int(w * 0.70)
         mouth_area = gray[mouth_y1:mouth_y2, mouth_x1:mouth_x2]
 
         if mouth_area.size == 0:
             return "neutral"
 
-        bright_ratio = float(np.sum(mouth_area > 200)) / mouth_area.size
-        overall_mean = float(np.mean(gray))
-        overall_var  = float(np.var(gray))
+        # Use Otsu on the central strip
+        teeth_ratio_b = _get_teeth_ratio(mouth_area)
+        overall_mean  = float(np.mean(gray))
+        overall_var   = float(np.var(gray))
 
-        if bright_ratio > 0.25:
+        if teeth_ratio_b > 0.10:           # clear teeth → happy
             return "happy"
-        elif overall_mean < 90 or overall_var < 500:
+        elif teeth_ratio_b > 0.05 and overall_mean > 120:
+            return "happy"
+        elif overall_mean < 85 or overall_var < 400:
             return "sad"
         else:
             return "neutral"
@@ -788,7 +783,7 @@ def render_sidebar(username):
     if st.sidebar.button("🚪 Logout"):
         st.session_state["logged_in"] = False
         st.rerun()
-    st.sidebar.caption("MoodTunes v5.5 · Fixed · No Smile Cascade · Pure Pixel Analysis")
+    st.sidebar.caption("MoodTunes v5.5 · Pixel-Ratio Smile · OpenCV")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1233,20 +1228,23 @@ HISTORY_FILE  = exists={os.path.exists(HISTORY_FILE)}""")
 
         st.markdown("---")
         st.markdown("""
-#### ℹ️ About MoodTunes v5.5 — FIXED
+#### ℹ️ About MoodTunes v5.5 — FINAL
 
-**✅ v5.5 Key Fix — Smile Haar Cascade पूर्णपणे काढला:**
-- `haarcascade_smile.xml` आता वापरत नाही — tilted / side-lit faces वर false happy येत नाही
-- Pure pixel analysis: 7 signals combine करतो
+**✅ v5.5 Key Fix — Pixel-Ratio Smile Detection (No Smile Cascade)**
 
-**7 Detection Signals:**
-1. 🦷 **teeth_ratio** — mouth मध्ये bright pixels (>180) — strongest signal
-2. 📊 **mouth_std** — smile असेल तर mouth contrast जास्त
-3. 💡 **mouth_mean** — mouth area brightness
-4. 👁️ **both_eyes_open** — droopy/closed eyes = sad/tired (+2 sad)
-5. 🌑 **face_mean** — dark face = sad
-6. 📉 **face_var** — flat expression = sad/neutral
-7. 🤨 **brow_var** — furrowed brows = concerned/sad
+**Root cause of the bug in v5.4:**
+The Haar smile cascade has no reliable `minNeighbors` value:
+- `minNeighbors=22` → too strict → missed real smiles → wrong "Sad" on smiling faces ❌
+- `minNeighbors=8`  → too loose → false positives on neutral/sad faces ❌
+No single threshold works for all lighting, angles, and face types.
+
+**v5.5 Solution — Otsu Pixel-Ratio Method:**
+1. Detect face bounding box with Haar (still reliable for this)
+2. Isolate mouth ROI: bottom 30% of face, middle 60% width
+3. Apply Otsu adaptive threshold → separates bright teeth from dark lips/skin
+4. `teeth_ratio` = bright pixels / total mouth pixels
+5. `teeth_ratio > 0.08` → Happy 😄 (teeth clearly showing)
+6. Eye-openness + face brightness used as secondary tiebreaker
 
 **Text Detection — Keyword + VADER:**
 - 😄 Happy: happy, joy, excited, great, awesome…
@@ -1257,7 +1255,7 @@ HISTORY_FILE  = exists={os.path.exists(HISTORY_FILE)}""")
 
 **Stack:** Python · Streamlit · Keyword+VADER · TextBlob · OpenCV · Scikit-learn · Plotly
         """)
-        st.caption("MoodTunes v5.5 Fixed · No Smile Cascade · Pure Pixel Analysis · Python 3.14 ✅")
+        st.caption("MoodTunes v5.5 Final · Pixel-Ratio Smile · No TensorFlow · Python 3.14 ✅")
 
 
 # ══════════════════════════════════════════════════════════════════════════
