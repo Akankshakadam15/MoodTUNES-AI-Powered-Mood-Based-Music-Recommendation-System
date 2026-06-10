@@ -392,48 +392,35 @@ def detect_face_emotion_from_image(pil_image):
             x, y, fw, fh = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
             face_roi = gray_eq[y:y+fh, x:x+fw]
 
-            # Smile detection — minNeighbors=10 is key (8 gives false positives)
+            # Smile detection — very strict params to avoid false positives
             smile_cascade = cv2.CascadeClassifier(
                 cv2.data.haarcascades + "haarcascade_smile.xml"
             )
             lower_face     = face_roi[fh//2:, :]
             smiles         = smile_cascade.detectMultiScale(
-                lower_face,
-                scaleFactor=1.7,
-                minNeighbors=22,
-                minSize=(35, 15),
+                lower_face, scaleFactor=1.7, minNeighbors=22, minSize=(35, 15),
             )
             smile_detected = len(smiles) > 0
 
-            # Eye detection
-            eye_cascade    = cv2.CascadeClassifier(
-                cv2.data.haarcascades + "haarcascade_eye.xml"
-            )
-            upper_face     = face_roi[:fh//2, :]
-            eyes           = eye_cascade.detectMultiScale(upper_face, scaleFactor=1.1, minNeighbors=5)
-            both_eyes_open = len(eyes) >= 2
-
+            # Key metrics
             face_brightness  = float(np.mean(face_roi))
-            face_variance    = float(np.var(face_roi))
-            mouth_region     = face_roi[int(fh*0.65):int(fh*0.85), int(fw*0.2):int(fw*0.8)]
-            mouth_brightness = float(np.mean(mouth_region)) if mouth_region.size > 0 else 128
+            upper_brightness = float(np.mean(face_roi[:fh//2, :]))
+            lower_brightness = float(np.mean(face_roi[fh//2:, :]))
+            # upper/lower ratio: sad face has dark mouth → ratio > 1.3
+            ul_ratio = upper_brightness / lower_brightness if lower_brightness > 0 else 1.0
 
             if smile_detected:
                 return "happy"
 
-            # Sad vs neutral scoring
-            sad_score = 0
-            if face_variance   < 1800: sad_score += 1
-            if not both_eyes_open:     sad_score += 1
-            if mouth_brightness < 100: sad_score += 1
-            if face_brightness  < 100: sad_score += 1
-
-            if sad_score >= 2:
+            # Sad: forehead much brighter than mouth (tight lips, no smile)
+            if ul_ratio > 1.3:
                 return "sad"
-            elif both_eyes_open and face_brightness > 120:
+
+            # Neutral: balanced brightness
+            if face_brightness > 120:
                 return "neutral"
-            else:
-                return "calm"
+
+            return "calm"
 
         # ── PATH B: No face found → brightness analysis ───────────────
         # For partial/landscape photos
